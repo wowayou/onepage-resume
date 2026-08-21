@@ -45,18 +45,31 @@ fi
 # 4. 本人的真实标识串。**不写在这个文件里**——本脚本是公开仓库的一部分，
 #    把姓名和雇主名填进来等于亲手公开它们。改从 .identifiers 读，该文件在
 #    .gitignore 里，一行一个，# 开头是注释。没有这个文件就跳过这一项。
+#
+#    有些标识是你**故意**公开的（比如示例简历里当署名的个人域名）。这种写成
+#        yourdomain.com | content.example.toml examples/preview.png
+#    竖线右边是允许出现的文件，空格分隔；出现在别处照样报错。
 ID_FILE="${IDENTIFIERS_FILE:-.identifiers}"
 if [ -f "$ID_FILE" ]; then
   found=0
-  while IFS= read -r id; do
-    case "$id" in ''|\#*) continue ;; esac
-    if printf '%s\n' "$tracked" | xargs grep -lIF -- "$id" 2>/dev/null | grep -q .; then
-      files=$(printf '%s\n' "$tracked" | xargs grep -lIF -- "$id" 2>/dev/null | tr '\n' ' ')
-      bad "被跟踪的文件里出现了 .identifiers 中的标识：$files"
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    id=${line%%|*}; allow=""
+    [ "$line" != "$id" ] && allow=${line#*|}
+    # 去掉竖线两侧的空白
+    id=$(printf '%s' "$id" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -z "$id" ] && continue
+    hitfiles=$(printf '%s\n' "$tracked" | xargs grep -lIF -- "$id" 2>/dev/null)
+    for f in $allow; do
+      hitfiles=$(printf '%s\n' "$hitfiles" | grep -vxF -- "$f" || true)
+    done
+    hitfiles=$(printf '%s\n' "$hitfiles" | grep -v '^$' || true)
+    if [ -n "$hitfiles" ]; then
+      bad "被跟踪的文件里出现了 .identifiers 中的标识「$id」：$(printf '%s\n' "$hitfiles" | tr '\n' ' ')"
       found=1
     fi
   done < "$ID_FILE"
-  [ $found -eq 0 ] && ok "没有 .identifiers 里的标识串"
+  [ $found -eq 0 ] && ok "没有 .identifiers 里的标识串（允许列表内的除外）"
 else
   note "（没有 $ID_FILE，跳过标识串检查。建议建一个，见 README）"
 fi

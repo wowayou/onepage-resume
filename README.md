@@ -10,7 +10,9 @@
 
 ![示例预览](examples/preview.png)
 
-> 上图是仓库里的 `content.example.toml` 渲染出来的。人名、公司、域名、数字全是编的。
+> 上图是仓库里的 `content.example.toml` 渲染出来的。人名、公司、数字全是编的；
+> 顶部那两条链接是模板作者的（[eigentime.org](https://eigentime.org) ·
+> [github.com/wowayou](https://github.com/wowayou)），当署名用，你自己那份换掉就行。
 
 ## 它适合谁
 
@@ -51,6 +53,13 @@
    yourdomain.com
    某某科技有限公司
    EOF
+   ```
+
+   有些标识是你**故意**公开的——比如示例简历里当署名的个人域名。这种在竖线右边
+   列出允许出现的文件（空格分隔），出现在别处照样报错：
+
+   ```
+   yourdomain.com | content.example.toml
    ```
 
    ⚠️ **不要把这些串写进脚本本身**——脚本是公开仓库的一部分，写进去等于亲手
@@ -292,4 +301,6 @@ python render.py [--content PATH] [--theme PATH] [--css PATH]
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。示例内容里的人名、公司、域名、数字均为虚构。
+MIT，见 [LICENSE](LICENSE)。示例内容里的人名、公司、数字均为虚构；
+顶部两条链接指向模板作者 [eigentime.org](https://eigentime.org)。
+拿去改成你自己的，不用署名，留着也不介意。
