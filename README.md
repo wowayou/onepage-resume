@@ -1,5 +1,8 @@
 # onepage-resume
 
+[![render](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml/badge.svg)](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 用 TOML 写内容，用 CSS 排版，生成**一页**中文简历的 PDF / HTML / PNG。
 
 排版交给 WeasyPrint 的 CSS 盒模型，间距由引擎计算——不手工算坐标，所以不会出现
