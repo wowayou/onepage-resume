@@ -25,20 +25,11 @@ edition = "一页附件版"
 name = "张三"
 intent = "英文 SEO · 独立站运营 · B2B 网站增长"
 # 顶部身份行，与联系方式合并成一行，用 · 分隔
-facts = ["城市 / 可远程", "28 岁"]
+facts = ["城市 / 可远程"]
 
-[[contacts]]
-label = "手机 "
-value = "138-0000-0000"
-
-[[contacts]]
-label = "邮箱 "
-value = "me@example.com"
-
-[[contacts]]
-label = "微信 "
-value = "zhangsan"
-
+# 联系方式：示例里只保留公开主页类链接（个人博客、GitHub）。
+# 手机 / 邮箱 / 微信这类能直接定位到人的信息，只写进你自己的 content.toml
+# （已被 .gitignore 挡住），不要写进这份会提交到公开仓库的示例。
 [[contacts]]
 label = ""
 value = "example.com"
