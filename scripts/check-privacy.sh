@@ -2,8 +2,8 @@
 # 提交前的泄漏体检：只看 Git 真正跟踪的文件。
 # 用法：  ./scripts/check-privacy.sh      （在 Makefile 里是 make check）
 #
-# 它拦四类东西：被跟踪的私人内容文件、被跟踪的生成物、
-# 手机号 / 邮箱字面量、以及本人的真实标识串。
+# 它拦五类东西：被跟踪的私人内容文件、被跟踪的生成物、手机号 / 邮箱字面量、
+# 本人的真实标识串，以及过期的 README 预览图。
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -72,6 +72,24 @@ if [ -f "$ID_FILE" ]; then
   [ $found -eq 0 ] && ok "没有 .identifiers 里的标识串（允许列表内的除外）"
 else
   note "（没有 $ID_FILE，跳过标识串检查。建议建一个，见 README）"
+fi
+
+# 5. README 里那张预览图是不是还对得上示例内容。
+#    图是渲染产物，改了示例却忘了重渲，README 上就会一直挂着旧内容——
+#    第一版泄漏（预览图里印着手机号）正是这么发生的。
+#    examples/preview.sha256 存的是三份输入拼接后的 sha256，由 make preview 写入。
+PREVIEW_SRC="content.example.toml theme.toml resume.css"
+STAMP="examples/preview.sha256"
+if [ -f "$STAMP" ]; then
+  now=$(cat $PREVIEW_SRC | sha256sum | cut -d' ' -f1)
+  if [ "$now" = "$(tr -d '[:space:]' < "$STAMP")" ]; then
+    ok "预览图与示例内容一致"
+  else
+    bad "examples/preview.png 已过期：示例内容 / 版式改了，图还是旧的"
+    note "修：make preview（重渲并更新 $STAMP），然后把两个文件一起提交。"
+  fi
+else
+  bad "缺 $STAMP，无法判断预览图是否过期。跑一次 make preview 生成它。"
 fi
 
 echo

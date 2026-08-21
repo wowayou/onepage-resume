@@ -35,7 +35,7 @@
 | **你的真实内容** `content.toml` | 本仓库目录内，或仓库外任意路径 | ❌ 被 `.gitignore` 挡住 |
 | **生成物** `build/` | 本仓库 `build/` 或你指定的目录 | ❌ 被 `.gitignore` 挡住 |
 
-三道防线：
+四道防线：
 
 1. `.gitignore` 里是 `content*.toml` + `!content.example.toml`——**除了示例，任何
    内容文件都进不去**。按公司做定制版叫 `content.acme.toml` 也一样安全。
@@ -61,6 +61,11 @@
    ```
    yourdomain.com | content.example.toml
    ```
+4. **预览图不许过期。** README 顶部那张 `examples/preview.png` 是渲染产物：改了示例
+   内容或版式却忘了重渲，README 上就会一直挂着旧内容。`examples/preview.sha256`
+   记着三份输入（`content.example.toml` + `theme.toml` + `resume.css`）的哈希，
+   对不上 `make check` 就报错。改完示例跑一次 `make preview`，它会重渲、覆盖图片、
+   更新哈希，两个文件一起提交。
 
    ⚠️ **不要把这些串写进脚本本身**——脚本是公开仓库的一部分，写进去等于亲手
    公开你本想拦截的东西。`.identifiers` 存在才做这项检查，不存在就跳过。
@@ -238,7 +243,8 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 ## 文件职责
 
 - `content.example.toml` —— 虚构示例，仓库里跟踪的就是它。改版面结构（新增技能行、
-  调整经历顺序）时才动它，改完把同样的改动同步到你自己的内容文件。
+  调整经历顺序）时才动它，改完把同样的改动同步到你自己的内容文件，并跑一次
+  `make preview` 刷新预览图，否则 `make check` 会拦下来。
 - `content.toml` / `content.local.toml` / `content.*.toml` —— **你要投出去的那一份。**
   全部被 gitignore。查找优先级：`content.local.toml` → `content.toml` →
   `content.example.toml`。
@@ -246,6 +252,9 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
   一个 CSS 变量。
 - `resume.css` —— 版式规则。文件开头写了五条设计约束，改版式前先读。
 - `render.py` —— 渲染程序。正常维护内容时不要编辑。
+- `examples/preview.png` —— README 顶部那张图，由 `make preview` 生成。跟踪。
+- `examples/preview.sha256` —— 上面那张图对应的输入哈希，`make check` 用它判断图是否
+  过期。跟踪，由 `make preview` 写入，不要手改。
 - `build/` —— 生成物。不跟踪。
 
 ## 命令行参数
