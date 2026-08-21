@@ -42,26 +42,23 @@ else
   ok "没有手机号 / 真实邮箱"
 fi
 
-# 4. 本人的真实标识串。把你自己的姓名、域名、GitHub 用户名、雇主名加进来，
-#    这样"改示例时手滑粘了真东西进去"会被当场拦住。
-#    留空数组就跳过这一项。
-IDENTIFIERS=(
-  # "你的中文姓名"
-  # "yourdomain.com"
-  # "github.com/yourhandle"
-  # "某某公司"
-)
-if [ ${#IDENTIFIERS[@]} -gt 0 ]; then
+# 4. 本人的真实标识串。**不写在这个文件里**——本脚本是公开仓库的一部分，
+#    把姓名和雇主名填进来等于亲手公开它们。改从 .identifiers 读，该文件在
+#    .gitignore 里，一行一个，# 开头是注释。没有这个文件就跳过这一项。
+ID_FILE="${IDENTIFIERS_FILE:-.identifiers}"
+if [ -f "$ID_FILE" ]; then
   found=0
-  for id in "${IDENTIFIERS[@]}"; do
-    if printf '%s\n' "$tracked" | xargs grep -lIF "$id" 2>/dev/null | grep -q .; then
-      bad "被跟踪的文件里出现了真实标识：$id"
+  while IFS= read -r id; do
+    case "$id" in ''|\#*) continue ;; esac
+    if printf '%s\n' "$tracked" | xargs grep -lIF -- "$id" 2>/dev/null | grep -q .; then
+      files=$(printf '%s\n' "$tracked" | xargs grep -lIF -- "$id" 2>/dev/null | tr '\n' ' ')
+      bad "被跟踪的文件里出现了 .identifiers 中的标识：$files"
       found=1
     fi
-  done
-  [ $found -eq 0 ] && ok "没有真实标识串"
+  done < "$ID_FILE"
+  [ $found -eq 0 ] && ok "没有 .identifiers 里的标识串"
 else
-  note "（未配置 IDENTIFIERS，跳过真实标识检查；建议在本文件里填上）"
+  note "（没有 $ID_FILE，跳过标识串检查。建议建一个，见 README）"
 fi
 
 echo

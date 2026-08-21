@@ -5,6 +5,10 @@
 content*.toml
 !content.example.toml
 
+# ---- 隐私体检用的真实标识串 ----
+# 你的姓名 / 域名 / 雇主名，一行一个。check-privacy.sh 读它，Git 不碰它。
+.identifiers
+
 # ---- 生成物：PDF 里的手机号是能被直接搜出来的 ----
 build/
 # 万一有人在仓库根目录直接生成，这三条兜底（examples/ 子目录不受影响）
