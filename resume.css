@@ -1,0 +1,245 @@
+/* 一页 SEO 简历版式。
+ *
+ * 设计说明（改之前先读）：
+ * 1. 页面只用一种记号——线。姓名下的主线、贯穿正文的竖脊、条目前的短横、
+ *    脚注上的细线，共用同一套语言。不要再加圆点、色块、圆角卡片或图标。
+ * 2. 左侧竖脊是唯一的结构装置，取代了旧版每个标题后面那条横线。
+ *    栏目名靠右贴着竖脊，读者顺着这条线就能找到区块。
+ * 3. 经历和项目共用同一形状：标题行 + 面包屑元信息行 + 正文。
+ *    面包屑用 › 表示层级（公司 › 团队 › 时间），顶部身份行用 · 表示并列。
+ * 4. 只有一个强调色 --seal。所有颜色都在 theme.toml 里，不要在这里写死色值。
+ * 5. 字重只用 400 和 700。Noto CJK 只有 Regular 和 Bold 两档，写 500 / 600 会被
+ *    静默降级成 Regular，标签和正文就分不出来了——HR 黑白打印时尤其明显。
+ */
+
+/* ---------- 页面 ---------- */
+/* :root 变量和 @page 由 render.py 从 theme.toml 生成，拼在这个文件前面。 */
+
+* { box-sizing: border-box; }
+
+html {
+  font-family: var(--sans);
+  font-size: var(--body);
+  line-height: var(--body-leading);
+  color: var(--ink-2);
+  background: var(--paper);
+}
+
+body { margin: 0; }
+
+a { color: inherit; text-decoration: none; }
+
+/* ---------- 抬头：姓名 / 求职意向 / 身份行 / 概况 ---------- */
+
+.masthead-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16pt;
+}
+
+h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: var(--name);
+  font-weight: 700;
+  letter-spacing: var(--name-tracking);
+  line-height: 1.05;
+  color: var(--ink);
+}
+
+.intent {
+  margin: 0;
+  text-align: right;
+  font-size: var(--intent);
+  font-weight: 700;
+  color: var(--seal);
+}
+
+.masthead-rule {
+  height: var(--masthead);
+  margin-top: 7pt;
+  background: var(--seal);
+}
+
+.identity {
+  margin: 7pt 0 0;
+  font-size: var(--meta);
+  color: var(--steel);
+}
+
+.snippet {
+  margin: 11pt 0 0;
+  max-width: var(--measure);
+  font-size: var(--snippet);
+  line-height: var(--snippet-leading);
+  color: var(--ink-2);
+}
+
+/* ---------- 竖脊与栏目名 ---------- */
+
+.row {
+  display: grid;
+  grid-template-columns: var(--rail) 1fr;
+  column-gap: var(--gutter);
+}
+
+/* 各 .row 之间不留外边距，rail 的右边框才能连成一条不断的竖线。
+   区块间距一律用 padding，加在 rail 和 col 上。 */
+.rail {
+  position: relative;
+  padding-top: var(--section-gap);
+  padding-right: var(--rail-gap);
+  border-right: var(--spine) solid var(--hair);
+  text-align: right;
+}
+
+.rail span {
+  display: block;
+  font-family: var(--serif);
+  font-size: var(--rail-label);
+  line-height: 1.55;
+  letter-spacing: var(--rail-tracking);
+  margin-right: calc(var(--rail-tracking) * -1); /* 抵掉末字后面多出的字距 */
+  color: var(--seal);
+}
+
+/* 竖脊上标记区块起点的短记号 */
+.rail::after {
+  content: "";
+  position: absolute;
+  right: calc(var(--spine) * -1);
+  top: var(--section-gap);
+  width: var(--tick);
+  height: 11pt;
+  background: var(--seal);
+}
+
+.col {
+  padding-top: var(--section-gap);
+  padding-bottom: 1pt;
+}
+
+.row:first-child .rail,
+.row:first-child .col { padding-top: calc(var(--section-gap) + 3pt); }
+
+.row:first-child .rail::after { top: calc(var(--section-gap) + 3pt); }
+
+/* ---------- 核心能力 ---------- */
+
+.skills {
+  display: grid;
+  grid-template-columns: var(--skill-label) 1fr;
+  column-gap: 12pt;
+  row-gap: var(--skill-row-gap);
+  margin: 0;
+  font-size: var(--skill);
+  line-height: var(--skill-leading);
+}
+
+.skills dt {
+  font-weight: 700;
+  color: var(--seal);
+}
+
+.skills dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+/* ---------- 经历与项目：共用同一形状 ---------- */
+
+.entry + .entry { margin-top: var(--entry-gap); }
+
+.entry-title {
+  margin: 0;
+  font-size: var(--entry-title);
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.entry-title .role {
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+.entry-title .sep {
+  font-weight: 400;
+  color: var(--steel);
+  padding: 0 0.25em;
+}
+
+.entry-meta {
+  margin: 2pt 0 0;
+  font-size: var(--meta);
+  letter-spacing: 0.01em;
+  color: var(--steel);
+}
+
+.entry-meta .crumb + .crumb::before {
+  content: "\203A";        /* › 表示层级，区别于身份行的并列 · */
+  padding: 0 0.45em;
+}
+
+.entry-body { margin: 4pt 0 0; }
+
+.entry ul {
+  margin: 4pt 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.entry li {
+  position: relative;
+  padding-left: 12pt;
+  margin-top: var(--bullet-gap);
+}
+
+.entry li:first-child { margin-top: 0; }
+
+/* 条目记号也是一条线，和竖脊、主线同一套语言 */
+.entry li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.72em;
+  width: var(--bullet);
+  height: var(--bullet-weight);
+  background: var(--seal);
+}
+
+/* ---------- 教育背景 ---------- */
+
+.education { margin: 0; }
+
+/* ---------- 脚注 ---------- */
+
+.sheet-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 16pt;
+  margin-top: 12pt;
+  padding-top: 6pt;
+  border-top: var(--spine) solid var(--hair);
+  font-size: var(--footer);
+  color: var(--steel);
+}
+
+/* ---------- 屏幕预览：把 A4 画出来，打印时由 @page 接管 ---------- */
+
+@media screen {
+  body {
+    background: #EBEEF1;
+    padding: 24px 12px;
+  }
+
+  .sheet {
+    width: var(--sheet-width);
+    min-height: var(--sheet-height);
+    margin: 0 auto;
+    padding: var(--margin-top) var(--margin-side) var(--margin-bottom);
+    background: var(--paper);
+    box-shadow: 0 10px 34px rgba(22, 32, 43, 0.14);
+  }
+}

@@ -1,0 +1,125 @@
+# 虚构示例内容。仓库里跟踪的就是这一份，它只用来证明工具能跑通、版面长什么样。
+#
+# 里面所有人名、公司、域名、数字都是编的：张三是中文占位名，Acme / Globex 是
+# 通用虚构公司名，example.com / example.org 是 RFC 2606 保留域名，永远不会指向
+# 真实站点。**不要把你的真实信息写进这个文件**——它是要被提交到公开仓库的。
+#
+# 你自己的那一份这样开始：
+#     cp content.example.toml content.toml
+# content.toml 和 content.local.toml 都在 .gitignore 里，不会被提交。
+
+[document]
+status = "example"
+updated = "2026-08-21"
+# 生成物的文件名主干：build/resume.pdf、build/resume.html、build/resume.png
+output_basename = "resume"
+title = "英文 SEO / 独立站运营 / B2B 网站增长 - 简历"
+subject = "英文网站增长运营岗位简历"
+keywords = ["SEO", "Google SEO", "B2B", "独立站", "英文内容", "GSC", "GA4", "Technical SEO"]
+# 页脚。真正要投出去的那一份把下面两行清空，页脚整条消失——
+# 带着"示例内容"字样投出去等于告诉对方这是没填完的模板。
+preview_note = "示例内容 · 人名 / 公司 / 域名 / 数字均为虚构"
+edition = "一页附件版"
+
+[profile]
+name = "张三"
+intent = "英文 SEO · 独立站运营 · B2B 网站增长"
+# 顶部身份行，与联系方式合并成一行，用 · 分隔
+facts = ["城市 / 可远程", "28 岁"]
+
+[[contacts]]
+label = "手机 "
+value = "138-0000-0000"
+
+[[contacts]]
+label = "邮箱 "
+value = "me@example.com"
+
+[[contacts]]
+label = "微信 "
+value = "zhangsan"
+
+[[contacts]]
+label = ""
+value = "example.com"
+href = "https://example.com"
+
+[[contacts]]
+label = ""
+value = "github.com/example"
+href = "https://github.com/example"
+
+# 顶部概况段。位置紧接姓名，不另设标题。
+[summary]
+text = "两年英文网站内容与 Google SEO 经验，甲方内容生产、乙方 B2B 交付都做过，能把英文内容、SEO 执行与数据复盘串成一条线。未来希望补强询盘来源与销售反馈闭环。"
+
+[skills_section]
+title = "核心能力"
+
+[[skills]]
+label = "SEO 执行"
+text = "关键词研究与分组、搜索意图分析、TDK 撰写、内链与转化入口规划"
+
+[[skills]]
+label = "Technical SEO"
+text = "抓取、索引、收录与页面速度基础排查；WordPress 内 Schema / JSON-LD 配置与验证"
+
+[[skills]]
+label = "数据分析"
+text = "GSC、GA4、Looker Studio；从曝光、点击、CTR 与 Top 10 出词定位问题"
+
+[[skills]]
+label = "英文内容"
+text = "英文产品页、行业页、教程与博客的选题、编辑与发布"
+
+[[skills]]
+label = "网站与工具"
+text = "WordPress 维护；Astro + Git + Cloudflare Pages 部署；云主机基础运维"
+
+[[skills]]
+label = "海外推广"
+text = "YouTube、X、Reddit 内容分发；剪辑工具产出产品演示与教程视频"
+
+[experience_section]
+title = "工作经历"
+
+[[experiences]]
+company = "Acme Digital"
+role = "SEO 助理 / B2B 外贸站 SEO 交付"
+crumbs = ["乙方 SEO 交付团队", "2025.09 – 2026.05", "8 个月"]
+bullets = [
+  "交付组支持数十个 B2B 外贸站，本人参与其中约 20 个的建站 / 策划期交付：关键词拓展与分组、竞品与页面诊断、主要页面 TDK 撰写。",
+  "存量站的内容发布检查、站内基础优化与索引 / 收录排查。",
+  "输出 GSC / GA4 月报：从曝光、点击、CTR 与 Top 10 出词判断增长是否可持续，并给出下一步动作。",
+]
+
+[[experiences]]
+company = "Globex 软件"
+role = "网站英文编辑 / 海外内容运营"
+crumbs = ["甲方英文工具类软件产品站", "2023.12 – 2025.04", "1 年 5 个月"]
+bullets = [
+  "英文产品页、教程与博客的选题、编辑与发布；配合 SEO 优化标题与页面基础，AI 辅助初稿改写。",
+  "通过 YouTube、X、Reddit 分发内容与产品信息，制作产品演示与教程视频。",
+]
+
+[projects_section]
+title = "项目作品"
+
+[[projects]]
+title = "个人双语博客"
+crumbs = ["example.com", "Astro + Git + Cloudflare", "独立搭建并运营"]
+description = "从旧共享二级域迁到自有域：逐路径 301、GSC 地址变更、跨账号 Worker / KV 迁移、上线校验与回滚方案。"
+
+[[projects]]
+title = "B2B 站 Technical SEO 诊断"
+crumbs = ["公开站点 teardown", "无后台权限，未实施", "结论可复核"]
+description = "从 sitemap 的 URL 数与 Google 已知页面数的差值入手，追到四个成因：归档页可被索引、模板残留标题、隐藏 Home H1 与内容类型混用，按影响与成本排出 P0 / P1 / P2 并定义 GSC Pages 验收口径。"
+
+[[projects]]
+title = "Site Monitor"
+crumbs = ["Python", "github.com/example/site-monitor"]
+description = "关键页面 URL 清洗分类、状态码检查、批量截图与 HTML 报告生成，用于多站点巡检。"
+
+[education]
+title = "教育背景"
+items = ["示例大学", "市场营销", "本科", "2015 – 2019", "CET-6"]

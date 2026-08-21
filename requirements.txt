@@ -1,0 +1,4 @@
+# WeasyPrint 负责全部排版。它不是纯 Python：还需要系统的 pango / cairo /
+# harfbuzz / fontconfig，见 README 的"环境准备"。
+# 已验证版本：69.0（Python 3.14 / Ubuntu 24.04）
+weasyprint>=66

@@ -1,0 +1,60 @@
+# 设计令牌。每一项都会被写成 resume.css 里的 CSS 变量（--<键名>）。
+# 改这里就能整体调版式；改内容请改 content.toml；两者都不需要动 render.py。
+
+[fonts]
+# 正文西文优先用拉丁字体，中文再回落到 CJK 字体，西文间距更紧。
+sans = "'Noto Sans', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', sans-serif"
+serif = "'Noto Serif', 'Noto Serif CJK SC', 'Source Han Serif SC', 'SimSun', serif"
+
+[colors]
+paper = "#FFFFFF"
+ink = "#16202B"        # 标题与姓名，打印为黑
+ink-2 = "#3D4C5C"      # 正文
+steel = "#77879A"      # 面包屑、日期、脚注
+seal = "#0E4F4A"       # 唯一强调色：深墨绿，非默认企业蓝
+hair = "#D2DAE1"       # 竖脊与脚注细线；再浅竖脊就断成一截截的记号了
+
+[page]
+size = "A4"
+margin-top = "14mm"
+margin-side = "15mm"
+margin-bottom = "10mm"
+
+[layout]
+rail = "33pt"          # 含 rail-gap 与竖脊在内（border-box）；净宽正好 2 个中文字，
+                       # 4 字栏目名因此折成 2×2 的方块。改这个值前先数一遍字。
+rail-gap = "10pt"      # 栏目名到竖脊的距离
+gutter = "16pt"        # 竖脊到正文的距离
+skill-label = "80pt"   # 技能名列宽，够放最长的 Technical SEO
+measure = "164mm"      # 概况段最大行宽，避免整页宽长行
+
+# 下面四个是这一页的"呼吸"。嫌挤就先加这几个值，不要去缩字号——
+# 版面显得密，几乎总是因为块与块之间没有停顿，而不是因为字太大。
+# 加到一页装不下时，程序会直接报错，那时该砍的是 content.toml 里的字。
+section-gap = "13pt"   # 各区块（核心能力 / 工作经历 / …）上下留白
+entry-gap = "9.5pt"    # 相邻两段经历、两个项目之间
+bullet-gap = "4pt"     # 相邻两条 bullet 之间
+skill-row-gap = "6.5pt" # 技能表相邻两行之间
+
+[type]
+name = "26pt"
+name-tracking = "0.5pt"
+intent = "10.5pt"
+meta = "8.6pt"
+snippet = "10pt"
+snippet-leading = "1.58"
+rail-label = "9.6pt"
+rail-tracking = "0.10em"
+entry-title = "10.8pt"
+body = "9.5pt"
+body-leading = "1.62"  # 中文行距要比西文松；低于 1.55 换行的长句会糊成一片
+skill = "9.3pt"
+skill-leading = "1.55"
+footer = "7pt"
+
+[rules]
+masthead = "1.4pt"     # 姓名下方主线
+spine = "0.7pt"        # 贯穿全页的竖脊
+tick = "2pt"           # 竖脊上标记区块起点的短记号
+bullet = "5pt"         # 条目前的短横线长度
+bullet-weight = "1pt"  # 短横线粗细；再细会在低分辨率预览里忽隐忽现

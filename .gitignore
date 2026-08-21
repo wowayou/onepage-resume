@@ -1,0 +1,26 @@
+# ---- 你自己的简历内容：永远不提交 ----
+# 仓库里只跟踪虚构的 content.example.toml。任何其它 content*.toml 都被视为
+# 真实数据（姓名 / 手机 / 邮箱 / 微信 / 学校 / 雇主名），一律忽略。
+# 想按公司做定制版就叫 content.<公司>.toml，同样不会被提交。
+content*.toml
+!content.example.toml
+
+# ---- 生成物：PDF 里的手机号是能被直接搜出来的 ----
+build/
+# 万一有人在仓库根目录直接生成，这三条兜底（examples/ 子目录不受影响）
+/*.pdf
+/*.png
+/*.html
+
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# ---- 编辑器 / 系统 ----
+.claude/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

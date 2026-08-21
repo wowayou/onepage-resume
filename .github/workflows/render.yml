@@ -1,0 +1,48 @@
+# 两件事：证明仓库在一台干净机器上真的能装能跑，以及把隐私体检自动化。
+# 只渲染虚构示例——CI 里永远没有真实内容文件。
+name: render
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  render-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 隐私体检
+        run: ./scripts/check-privacy.sh
+
+      - name: 装系统依赖（WeasyPrint 的 pango / cairo / 字体）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+            libfontconfig1 libcairo2 \
+            fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-core \
+            poppler-utils
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 装 Python 依赖
+        run: pip install -r requirements.txt
+
+      - name: 渲染示例
+        run: python render.py --content content.example.toml --out-dir build/example
+
+      - name: 确认是一页
+        run: |
+          pages=$(pdfinfo build/example/resume.pdf | awk '/^Pages:/ {print $2}')
+          echo "页数：$pages"
+          [ "$pages" = "1" ]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-resume
+          path: build/example/
