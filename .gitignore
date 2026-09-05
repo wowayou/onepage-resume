@@ -5,6 +5,10 @@
 content*.toml
 !content.example.toml
 
+# fill.py 覆盖前留的备份。注意 content.toml.bak 不匹配上面的 content*.toml——
+# 后缀变了，规则就漏了，而备份里装的是一模一样的真实内容。
+*.toml.bak
+
 # ---- 隐私体检用的真实标识串 ----
 # 你的姓名 / 域名 / 雇主名，一行一个。check-privacy.sh 读它，Git 不碰它。
 .identifiers

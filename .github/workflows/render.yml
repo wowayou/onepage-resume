@@ -37,6 +37,18 @@ jobs:
       - name: 渲染示例
         run: python render.py --content content.example.toml --out-dir build/example
 
+      - name: 空白表单必须被拦下（填空 → 渲染这条链的守卫）
+        run: |
+          python fill.py --blank --out /tmp/blank.toml
+          if python render.py --content /tmp/blank.toml --out-dir /tmp/blank-out; then
+            echo "空白表单竟然渲染成功了：schema 的必填标记和渲染器脱节了"
+            exit 1
+          fi
+
+      - name: 示例表单必须能渲染（schema 覆盖了渲染器要的全部字段）
+        run: python fill.py --blank --sample --out /tmp/sample.toml &&
+             python render.py --content /tmp/sample.toml --out-dir /tmp/sample-out
+
       - name: 确认是一页
         run: |
           pages=$(pdfinfo build/example/resume.pdf | awk '/^Pages:/ {print $2}')

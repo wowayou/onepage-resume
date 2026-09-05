@@ -3,6 +3,9 @@
 排版由 WeasyPrint 用真正的 CSS 盒模型完成，间距由引擎计算，不再手工算坐标。
 日常维护只需要改内容文件；调版式改 theme.toml 或 resume.css；这个文件不用动。
 
+内容文件怎么来：跑 `python fill.py` 一题一题填，或 `python fill.py --blank`
+生成空白表单自己填。字段表在 schema.py，填和渲染读的是同一份定义。
+
 用法：
     python render.py                          # 用默认查找到的内容文件
     python render.py --content ~/private/me.toml --out-dir ~/private/build
@@ -19,6 +22,8 @@ import tomllib
 from pathlib import Path
 
 from weasyprint import HTML
+
+import schema
 
 HERE = Path(__file__).resolve().parent
 
@@ -50,18 +55,21 @@ def load_toml(path: Path) -> dict:
         return tomllib.load(stream)
 
 
-def validate_content(content: dict) -> None:
-    required = [
-        "document", "profile", "contacts", "summary",
-        "skills", "experiences", "projects", "education",
-    ]
-    missing = [key for key in required if key not in content]
-    if missing:
-        raise ValueError(f"content.toml 缺少字段：{'、'.join(missing)}")
-    if not content["experiences"]:
-        raise ValueError("content.toml 至少需要一段工作经历。")
-    if not content["projects"]:
-        raise ValueError("content.toml 至少需要一个项目。")
+def validate_content(content: dict, source: Path) -> None:
+    """字段表在 schema.py 里，这里只负责把没填的空报到具体位置。
+
+    宁可在这里停下，也不要渲染出一份带着空标题、空 bullet 的 PDF——
+    那种 PDF 看上去是"成功了"的，很容易就这么发出去。
+    """
+    blanks = schema.find_blanks(content)
+    if not blanks:
+        return
+    listing = "\n".join(f"  {line}" for line in blanks)
+    raise SystemExit(
+        f"错误：{source.name} 还有 {len(blanks)} 处空白没填：\n{listing}\n\n"
+        f"补齐：python fill.py --out {source}\n"
+        f"或者直接编辑 {source.name}。"
+    )
 
 
 def stack_families(stack: str) -> list[str]:
@@ -157,10 +165,16 @@ class ResumeBuilder:
     # ---------- 片段 ----------
 
     def identity_line(self) -> str:
-        """身份事实和联系方式合并成一行，用 · 分隔（并列关系，区别于经历行的 ›）。"""
-        parts = [esc(fact) for fact in self.content["profile"]["facts"]]
+        """身份事实和联系方式合并成一行，用 · 分隔（并列关系，区别于经历行的 ›）。
+
+        facts 是选填的；标签和内容之间的那个空格由这里补，不指望内容文件里
+        写成 "手机 "——TOML 里行尾的空格看不见，也很容易被编辑器吃掉。
+        """
+        facts = self.content["profile"].get("facts") or []
+        parts = [esc(fact) for fact in facts if str(fact).strip()]
         for item in self.content["contacts"]:
-            text = f'{esc(item.get("label", ""))}{esc(item["value"])}'
+            label = str(item.get("label", "")).strip()
+            text = f'{esc(label)} {esc(item["value"])}' if label else esc(item["value"])
             if item.get("href"):
                 text = f'<a href="{esc(item["href"])}">{text}</a>'
             parts.append(text)
@@ -310,8 +324,9 @@ def resolve_content(explicit: str | None) -> Path:
         if candidate.exists():
             return candidate
     raise SystemExit(
-        "错误：没有找到内容文件。先复制一份示例：\n"
-        f"    cp {HERE / EXAMPLE_CONTENT} {HERE / 'content.toml'}"
+        "错误：没有找到内容文件。两条路：\n"
+        "    python fill.py           一题一题地填，填完自动写 content.toml\n"
+        "    python fill.py --blank   生成一份空白表单，自己在编辑器里填"
     )
 
 
@@ -346,7 +361,7 @@ def main(argv: list[str] | None = None) -> None:
 
     content = load_toml(content_path)
     theme = load_toml(theme_path)
-    validate_content(content)
+    validate_content(content, content_path)
     check_fonts(theme)
 
     basename = args.name or content["document"].get("output_basename") or "resume"

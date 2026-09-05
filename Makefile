@@ -3,13 +3,15 @@ VENV ?= .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
-.PHONY: help setup render example preview check clean
+.PHONY: help setup fill blank render example preview check clean
 
 # README 里那张预览图的三份输入。任何一份变了，图就过期了。
 PREVIEW_SRC := content.example.toml theme.toml resume.css
 
 help:
 	@echo "make setup    创建 venv 并装依赖（系统依赖见 README）"
+	@echo "make fill     填空：一题一题地填出 content.toml"
+	@echo "make blank    生成一份空白表单，自己在编辑器里填"
 	@echo "make render   渲染你自己的简历到 build/"
 	@echo "make example  渲染虚构示例，用来确认环境是通的"
 	@echo "make preview  重渲示例并更新 README 里的预览图（改完示例必跑）"
@@ -20,6 +22,12 @@ setup:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r requirements.txt
+
+fill:
+	$(PY) fill.py
+
+blank:
+	$(PY) fill.py --blank
 
 render:
 	$(PY) render.py

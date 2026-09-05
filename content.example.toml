@@ -6,8 +6,9 @@
 # 留在这里当署名。**不要把你的真实信息写进这个文件**——它是要被提交到公开仓
 # 库的；你自己那份把那两条换成你的。
 #
-# 你自己的那一份这样开始：
-#     cp content.example.toml content.toml
+# 你自己的那一份这样开始（别在这个文件上改）：
+#     python fill.py            一题一题地填，填完自动写 content.toml
+#     python fill.py --blank    生成一份空白表单，自己在编辑器里填
 # content.toml 和 content.local.toml 都在 .gitignore 里，不会被提交。
 
 [document]

@@ -3,7 +3,10 @@
 [![render](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml/badge.svg)](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-用 TOML 写内容，用 CSS 排版，生成**一页**中文简历的 PDF / HTML / PNG。
+**填空式**的一页简历生成器：`python fill.py` 一题一题地问，问完直接出 PDF / HTML / PNG。
+不想被问就 `python fill.py --blank` 拿一份空白表单，在编辑器里把每个空填上。
+
+答案存成 TOML，版面用 CSS 排——内容和版式始终是分开的两个文件。
 
 排版交给 WeasyPrint 的 CSS 盒模型，间距由引擎计算——不手工算坐标，所以不会出现
 "标题压住上一段文字"这种事。内容超过一页时程序**报错拒绝生成**，不会偷偷给你第二页。
@@ -17,6 +20,7 @@
 ## 它适合谁
 
 - 想要一份克制、能过 ATS、黑白打印也清楚的一页中文简历；
+- 不想从零排版，也不想被在线编辑器绑住：回答一串问题就有一份 PDF；
 - 愿意把内容和版式分开：改内容只动 TOML，调版式只动 `theme.toml`；
 - 需要按岗位做多个定制版，而且**不想让真实姓名手机邮箱进 Git**。
 
@@ -33,12 +37,15 @@
 | 程序、版式、设计令牌 | 本仓库 | ✅ 跟踪 |
 | `content.example.toml` 虚构示例 | 本仓库 | ✅ 跟踪 |
 | **你的真实内容** `content.toml` | 本仓库目录内，或仓库外任意路径 | ❌ 被 `.gitignore` 挡住 |
+| `fill.py` 留的备份 `content.toml.bak` | 内容文件旁边 | ❌ 被 `.gitignore` 挡住 |
 | **生成物** `build/` | 本仓库 `build/` 或你指定的目录 | ❌ 被 `.gitignore` 挡住 |
 
 四道防线：
 
 1. `.gitignore` 里是 `content*.toml` + `!content.example.toml`——**除了示例，任何
    内容文件都进不去**。按公司做定制版叫 `content.acme.toml` 也一样安全。
+   `*.toml.bak` 另有一条：`content.toml.bak` 后缀变了，不匹配 `content*.toml`，
+   而备份里装的是一模一样的真实内容。
 2. `build/` 整个目录忽略。PDF 的正文是可被全文搜索的，手机号进了 Git 历史就得重写
    历史才删得掉。
 3. `./scripts/check-privacy.sh`（= `make check`）在提交前扫一遍**被跟踪的**文件里
@@ -90,9 +97,8 @@ cd onepage-resume
 make setup                       # 建 venv 装 weasyprint
 make example                     # 渲染虚构示例，确认环境是通的
 
-cp content.example.toml content.toml    # content.toml 已被 gitignore
-$EDITOR content.toml                    # 填你自己的信息
-make render                             # 出 build/resume.pdf
+make fill                        # 填空：一题一题问，写出 content.toml
+make render                      # 出 build/<你起的文件名>.pdf
 ```
 
 没有 `make` 就用原始命令：
@@ -100,7 +106,41 @@ make render                             # 出 build/resume.pdf
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+.venv/bin/python fill.py
 .venv/bin/python render.py
+```
+
+### 两种填法，挑一种
+
+**一、被问着填**（第一次用推荐）
+
+```bash
+python fill.py
+```
+
+一题一题往下走，每题都带一句解释和一个例子。回车 = 跳过选填项；数组类的
+（联系方式、技能、经历、项目）每填完一条会问你要不要再来一条；Ctrl-C 随时退出，
+**不会写半份文件**。
+
+再跑一次就是"改一处"：它会先把已有的 `content.toml` 读进来，每题显示当前值，
+回车保留、输入覆盖。覆盖前旧文件会备份成 `content.toml.bak`（同样不进 Git）。
+
+**二、自己在编辑器里填**
+
+```bash
+python fill.py --blank           # 生成 content.toml：每个空都在，但都空着
+python fill.py --blank --sample  # 想先看版面，就用带示例答案的那一份
+$EDITOR content.toml
+```
+
+表单里每个空上面都有一行注释，写清楚这个空是干什么的、该写多长、例子长什么样。
+数组表想加一条就整段复制粘贴。
+
+**空没填完会怎样**：渲染时被拦下来，逐条告诉你哪个表的哪个字段还空着——
+不会渲染出一份带着空标题的 PDF，那种"看上去成功了"的 PDF 最容易被直接发出去。
+
+```bash
+python fill.py --check           # 只检查，不渲染
 ```
 
 ---
@@ -193,8 +233,7 @@ make example        # 出 build/example/resume.pdf 就说明环境通了
   换机器、回滚、多版本都有 Git 兜底。
 - **加密后随便传**：`age` 或 `gpg -c` 加密成一个文件，走网盘 / 邮件都行，
   在新机器上解密。
-- **手动重填**：`cp content.example.toml content.toml` 然后照着旧的抄一遍。
-  最笨但零传输风险。
+- **手动重填**：`make fill` 照着旧的抄一遍。最笨但零传输风险。
 
 ❌ **不要**把真实内容 push 进这个公开仓库来"同步"，哪怕只是一次、哪怕马上删掉——
 Git 历史留着，GitHub 的缓存和各种镜像爬虫也留着。
@@ -242,6 +281,11 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 
 ## 文件职责
 
+- `schema.py` —— **字段表：这份简历一共有哪些"空"，只在这里定义一次。**
+  `fill.py` 照着它提问，`fill.py --blank` 照着它生成空白表单，`render.py` 照着它
+  检查空白。加一个字段只改这一处，三边自动跟上——分开写迟早会出现"问卷问了但渲染
+  不认"的字段。
+- `fill.py` —— 填空程序。交互提问、生成空白表单、检查空白，最后写出内容 TOML。
 - `content.example.toml` —— 虚构示例，仓库里跟踪的就是它。改版面结构（新增技能行、
   调整经历顺序）时才动它，改完把同样的改动同步到你自己的内容文件，并跑一次
   `make preview` 刷新预览图，否则 `make check` 会拦下来。
@@ -258,6 +302,16 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 - `build/` —— 生成物。不跟踪。
 
 ## 命令行参数
+
+```
+python fill.py [--out PATH] [--blank] [--sample] [--check]
+```
+
+- `--out` 写到哪，默认 `content.toml`。写成 `-` 就打到标准输出。
+  真实内容建议写到仓库外：`python fill.py --out ~/.private/resume/me.toml`。
+- `--blank` 不提问，直接生成一份空白表单。
+- `--sample` 配合 `--blank`：把示例答案填进去，用来先看版面。**投递前必须自己重填。**
+- `--check` 只检查 `--out` 指的那个文件还有哪些空没填。
 
 ```
 python render.py [--content PATH] [--theme PATH] [--css PATH]

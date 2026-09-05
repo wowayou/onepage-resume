@@ -15,7 +15,7 @@ ok()   { printf '\033[32m✓ %s\033[0m\n' "$1"; }
 tracked=$(git ls-files)
 
 # 1. 私人内容文件不该被跟踪
-leaked=$(printf '%s\n' "$tracked" | grep -E '^content.*\.toml$' | grep -v '^content\.example\.toml$' || true)
+leaked=$(printf '%s\n' "$tracked" | grep -E '^content.*\.toml$|\.toml\.bak$' | grep -v '^content\.example\.toml$' || true)
 if [ -n "$leaked" ]; then
   bad "这些内容文件被 Git 跟踪了（里面是真实信息）："
   printf '%s\n' "$leaked" | while read -r f; do note "$f"; done
