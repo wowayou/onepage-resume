@@ -1,0 +1,18 @@
+# 英文版式令牌：只写与 theme.toml 不同的那几项，其余全部继承。
+#
+# 为什么要一份单独的：竖脊左边那列宽度是按"两个中文字"定死的（33pt）。
+# 英文栏目名 CAPABILITIES / EXPERIENCE 塞不进两个字的宽度，会逐字母折行。
+# 所以英文版把 rail 放宽、字号收小，其它（颜色、线宽、间距）一律走中文版。
+extends = "theme.toml"
+
+[layout]
+rail = "68pt"          # 够放 EXPERIENCE 这个最长的栏目名
+skill-label = "96pt"   # 够放 Content & Channels
+measure = "168mm"
+
+[type]
+rail-label = "8.4pt"
+rail-tracking = "0.08em"
+body-leading = "1.5"   # 纯西文不需要中文那么松的行距
+skill-leading = "1.45"
+snippet-leading = "1.5"

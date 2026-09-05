@@ -8,6 +8,7 @@
 
 用法：
     python render.py                          # 用默认查找到的内容文件
+    python render.py --theme theme.en.toml    # 英文版式（竖脊更宽、行距更紧）
     python render.py --content ~/private/me.toml --out-dir ~/private/build
 """
 
@@ -53,6 +54,34 @@ def esc(value: object) -> str:
 def load_toml(path: Path) -> dict:
     with path.open("rb") as stream:
         return tomllib.load(stream)
+
+
+def load_theme(path: Path, seen: tuple[Path, ...] = ()) -> dict:
+    """读一个主题文件。它可以用 extends = "theme.toml" 继承另一个，只写要改的令牌。
+
+    这样做语言变体（中文窄竖脊 / 英文宽竖脊）不用把整份令牌抄一遍——抄一遍的
+    代价是以后改颜色要记得改两处，而人是会忘的。
+    """
+    if path in seen:
+        chain = " → ".join(p.name for p in (*seen, path))
+        raise SystemExit(f"错误：主题继承成环了：{chain}")
+
+    theme = load_toml(path)
+    parent_name = theme.pop("extends", None)
+    if not parent_name:
+        return theme
+
+    parent_path = (path.parent / parent_name).resolve()
+    if not parent_path.exists():
+        raise SystemExit(f"错误：{path.name} 继承的 {parent_name} 不存在。")
+
+    merged = load_theme(parent_path, (*seen, path))
+    for group, values in theme.items():
+        if isinstance(values, dict) and isinstance(merged.get(group), dict):
+            merged[group] = {**merged[group], **values}
+        else:
+            merged[group] = values
+    return merged
 
 
 def validate_content(content: dict, source: Path) -> None:
@@ -360,7 +389,7 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = Path(args.out_dir).expanduser().resolve()
 
     content = load_toml(content_path)
-    theme = load_toml(theme_path)
+    theme = load_theme(theme_path)
     validate_content(content, content_path)
     check_fonts(theme)
 

@@ -19,7 +19,7 @@
 
 ## 它适合谁
 
-- 想要一份克制、能过 ATS、黑白打印也清楚的一页中文简历；
+- 想要一份克制、能过 ATS、黑白打印也清楚的一页简历（中文、英文都行）；
 - 不想从零排版，也不想被在线编辑器绑住：回答一串问题就有一份 PDF；
 - 愿意把内容和版式分开：改内容只动 TOML，调版式只动 `theme.toml`；
 - 需要按岗位做多个定制版，而且**不想让真实姓名手机邮箱进 Git**。
@@ -294,6 +294,9 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
   `content.example.toml`。
 - `theme.toml` —— 设计令牌：字体、颜色、页边距、字号、间距、线宽。每一项都会变成
   一个 CSS 变量。
+- `theme.en.toml` —— 英文版式。用 `extends = "theme.toml"` 继承上面那份，只写不同的
+  几项（竖脊更宽——英文栏目名塞不进两个中文字的宽度；行距更紧——纯西文不需要中文
+  那么松的行距）。写英文简历时 `--theme theme.en.toml`。
 - `resume.css` —— 版式规则。文件开头写了五条设计约束，改版式前先读。
 - `render.py` —— 渲染程序。正常维护内容时不要编辑。
 - `examples/preview.png` —— README 顶部那张图，由 `make preview` 生成。跟踪。
@@ -319,7 +322,8 @@ python render.py [--content PATH] [--theme PATH] [--css PATH]
 ```
 
 - `--content` 内容 TOML 路径。省略时按上面的优先级在脚本目录里找。
-- `--theme` / `--css` 换一套设计令牌或版式，做 A/B 版面时有用。
+- `--theme` / `--css` 换一套设计令牌或版式。英文简历用 `--theme theme.en.toml`；
+  自己做变体时新建一份，开头写 `extends = "theme.toml"`，只列要改的令牌。
 - `--out-dir` 生成物目录，默认 `build/`。
 - `--name` 生成物文件名主干；不给就读 `[document]` 的 `output_basename`，
   再不给就是 `resume`。想投出去的附件叫 `张三-SEO-简历.pdf`，在内容文件里写
