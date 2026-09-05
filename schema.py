@@ -84,7 +84,7 @@ CONTACTS = Block(
     repeat=True,
     min_items=1,
     fields=(
-        Field("value", "联系方式的内容", "", "13800000000"),
+        Field("value", "联系方式的内容", "", "138-0000-0000"),
         Field("label", "前面的标签", "比如「手机」「邮箱」。链接类的（个人站、GitHub）留空更干净",
               "手机", required=False),
         Field("href", "点击后跳到哪", "只有网址和邮箱需要；手机号留空",
