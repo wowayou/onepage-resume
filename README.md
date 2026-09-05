@@ -68,14 +68,15 @@
    ```
    yourdomain.com | content.example.toml
    ```
+
+   ⚠️ **不要把这些串写进脚本本身**——脚本是公开仓库的一部分，写进去等于亲手
+   公开你本想拦截的东西。`.identifiers` 存在才做这项检查，不存在就跳过。
+
 4. **预览图不许过期。** README 顶部那张 `examples/preview.png` 是渲染产物：改了示例
    内容或版式却忘了重渲，README 上就会一直挂着旧内容。`examples/preview.sha256`
    记着三份输入（`content.example.toml` + `theme.toml` + `resume.css`）的哈希，
    对不上 `make check` 就报错。改完示例跑一次 `make preview`，它会重渲、覆盖图片、
    更新哈希，两个文件一起提交。
-
-   ⚠️ **不要把这些串写进脚本本身**——脚本是公开仓库的一部分，写进去等于亲手
-   公开你本想拦截的东西。`.identifiers` 存在才做这项检查，不存在就跳过。
 
 **更稳的做法**：把真实内容文件放在本仓库之外（比如另一个私有仓库、或
 `~/.private/resume/me.toml`），用 `--content` 指过来。这样连"误改 .gitignore"
