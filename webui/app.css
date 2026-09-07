@@ -1,0 +1,432 @@
+/* 填空表单的界面样式。
+ *
+ * 两条约束：
+ * 1. 这个文件只管**工具界面**。纸上那一页的样式在 resume.css，由 theme.toml 驱动，
+ *    两者互不影响——改工具界面永远不会动到简历版面。
+ * 2. 配色借简历自己的那套（墨绿 --seal、细线 --hair、钢灰 --steel），
+ *    这样预览和外壳看着是一件东西。但工具需要按钮和悬停反馈，
+ *    所以这里允许圆角和背景色，简历版面里不允许。
+ */
+
+:root {
+  --seal: #0E4F4A;
+  --seal-soft: #E6EEED;
+  --ink: #16202B;
+  --ink-2: #3D4C5C;
+  --steel: #77879A;
+  --hair: #D2DAE1;
+  --paper: #FFFFFF;
+  --shell: #EBEEF1;
+  --warn: #A6501B;
+  --bad: #A32A22;
+  --good: #1F6B3F;
+
+  --bar-height: 54px;
+  --sans: 'Noto Sans', 'Noto Sans CJK SC', 'Source Han Sans SC',
+          'Microsoft YaHei', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  background: var(--shell);
+}
+
+/* ---------- 顶栏 ---------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex: 0 0 auto;
+  height: var(--bar-height);
+  padding: 0 16px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--hair);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.brand strong {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.brand-sub {
+  font-size: 11.5px;
+  color: var(--steel);
+}
+
+.bar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--steel);
+  white-space: nowrap;
+}
+
+.control input,
+.control select {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink-2);
+  padding: 5px 7px;
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+}
+
+.control input { width: 168px; }
+
+.control input:focus,
+.control select:focus {
+  outline: 2px solid var(--seal-soft);
+  border-color: var(--seal);
+}
+
+/* ---------- 按钮 ---------- */
+
+button {
+  font-family: var(--sans);
+  font-size: 12.5px;
+  padding: 6px 13px;
+  border-radius: 4px;
+  border: 1px solid var(--hair);
+  background: var(--paper);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { border-color: var(--seal); color: var(--seal); }
+
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+button.primary {
+  background: var(--seal);
+  border-color: var(--seal);
+  color: #fff;
+  font-weight: 700;
+}
+
+button.primary:hover:not(:disabled) { background: #0B403C; color: #fff; }
+
+button.icon {
+  padding: 2px 7px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--steel);
+}
+
+/* 标记有未保存改动：给"保存 TOML"加一个点，不用弹窗提醒 */
+button.dirty::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+/* ---------- 两栏舞台 ---------- */
+
+.stage {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(380px, 460px) 1fr;
+  min-height: 0;                 /* 让两栏各自滚，而不是把整页顶长 */
+}
+
+.pane {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.form-pane {
+  background: var(--paper);
+  border-right: 1px solid var(--hair);
+  padding: 0 0 28px;
+}
+
+.view-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;              /* 预览自己不滚，纸整体缩放到合适大小 */
+}
+
+@media (max-width: 900px) {
+  .stage { grid-template-columns: 1fr; }
+  .view-pane { display: none; }  /* 窄屏先保证能填字 */
+}
+
+/* ---------- 区块跳转 ---------- */
+
+.jump {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--hair);
+}
+
+.jump a {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  color: var(--steel);
+  text-decoration: none;
+}
+
+.jump a:hover { border-color: var(--seal); color: var(--seal); }
+
+/* ---------- 表单 ---------- */
+
+.form { padding: 4px 16px 0; }
+
+.block { padding: 18px 0 4px; border-bottom: 1px solid var(--hair); }
+
+.block:last-child { border-bottom: 0; }
+
+.block > h2 {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--seal);
+  letter-spacing: 0.04em;
+}
+
+.block > .intro {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--steel);
+}
+
+.field { margin-top: 12px; }
+
+.field > label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.field .req { color: var(--bad); padding-left: 3px; }
+
+.field .hint {
+  display: block;
+  margin: 2px 0 5px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--steel);
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  padding: 6px 8px;
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.field textarea { min-height: 54px; }
+
+.field input:focus,
+.field textarea:focus {
+  outline: 2px solid var(--seal-soft);
+  border-color: var(--seal);
+}
+
+/* 空着的必填项：不拦你继续填，但让它显眼 */
+.field input.blank,
+.field textarea.blank { border-color: #E7B4AF; }
+
+.field .count {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  text-align: right;
+  color: var(--steel);
+}
+
+/* ---------- 数组表：一条一张卡 ---------- */
+
+.card {
+  margin-top: 12px;
+  padding: 10px 12px 12px;
+  background: #FAFBFC;
+  border: 1px solid var(--hair);
+  border-radius: 5px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-head .no {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--steel);
+  letter-spacing: 0.06em;
+}
+
+.card-head .tools { display: flex; gap: 4px; }
+
+.card .field:first-of-type { margin-top: 8px; }
+
+.add {
+  margin-top: 10px;
+  width: 100%;
+  border-style: dashed;
+  color: var(--seal);
+}
+
+.limit {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--steel);
+}
+
+/* ---------- 状态条 ---------- */
+
+.status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--hair);
+  font-size: 11.5px;
+}
+
+.stat { color: var(--ink-2); white-space: nowrap; }
+
+.stat.muted { color: var(--steel); }
+
+.stat.good { color: var(--good); font-weight: 700; }
+
+.stat.bad { color: var(--bad); font-weight: 700; }
+
+.stat.warn { color: var(--warn); }
+
+.stat-gap { flex: 1 1 auto; }
+
+.downloads { display: flex; gap: 10px; }
+
+.downloads a {
+  font-size: 11.5px;
+  color: var(--seal);
+  text-decoration: none;
+  border-bottom: 1px solid var(--hair);
+}
+
+.downloads a:hover { border-bottom-color: var(--seal); }
+
+/* ---------- 纸 ----------
+ * iframe 里装的是 render.py 出的那份 HTML，宽度固定在 A4 的屏幕尺寸
+ * （210mm + resume.css 的 body 内边距 ≈ 818px），再用 transform 整体缩放
+ * 到当前栏宽。缩放而不是改 iframe 宽度，是为了让预览里的字号、行距、
+ * 换行位置与 PDF 完全一致——改宽度会让 CSS 重新断行，预览就骗人了。
+ */
+
+.paper {
+  --sheet-w: 818px;
+  --sheet-h: 1171px;
+  --scale: 1;
+
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.paper::after {                  /* 占位：把缩放后的实际高度撑出来 */
+  content: "";
+  flex: 0 0 0;
+}
+
+.paper > iframe {
+  width: var(--sheet-w);
+  height: var(--sheet-h);
+  flex: 0 0 auto;
+  border: 0;
+  background: var(--paper);
+  transform: scale(var(--scale));
+  transform-origin: top center;
+  /* 缩放不改变布局占位，用负 margin 把多出来的空间收回去 */
+  margin-bottom: calc(var(--sheet-h) * (var(--scale) - 1));
+}
+
+.paper.stale > iframe { opacity: 0.55; transition: opacity 120ms linear; }
+
+/* ---------- 提示条 ---------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%) translateY(8px);
+  max-width: min(680px, 88vw);
+  padding: 9px 15px;
+  border-radius: 5px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  box-shadow: 0 8px 26px rgba(22, 32, 43, 0.24);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms linear, transform 140ms ease-out;
+}
+
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.toast.bad { background: var(--bad); }
+
+.toast.good { background: var(--good); }
+

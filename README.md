@@ -5,6 +5,7 @@
 
 **填空式**的一页简历生成器：`python fill.py` 一题一题地问，问完直接出 PDF / HTML / PNG。
 不想被问就 `python fill.py --blank` 拿一份空白表单，在编辑器里把每个空填上。
+想边填边看版面就 `python webui.py`，浏览器里左边填字、右边实时看 A4（只听本机）。
 
 答案存成 TOML，版面用 CSS 排——内容和版式始终是分开的两个文件。
 
@@ -111,9 +112,41 @@ python3 -m venv .venv
 .venv/bin/python render.py
 ```
 
-### 两种填法，挑一种
+### 三种填法，挑一种
 
-**一、被问着填**（第一次用推荐）
+**〇、浏览器里填**（想边填边看版面就用这个）
+
+```bash
+make ui                          # 或 python webui.py
+# 打开 http://127.0.0.1:8765
+```
+
+左边是照着字段表长出来的表单，右边是那张 A4——打字停下约 0.4 秒，右边就用
+`render.py` 真渲一遍。所以预览里的换行位置、页数，和最后 PDF 里的完全一致，
+不是另写一套前端排版糊出来的近似效果。
+
+顶上那条状态栏是这个界面的重点：
+
+- **页数 1 ✓ / 2 ✗**——超一页当场变红，不用等点了"生成 PDF"才发现。
+- **空白 N 处**——鼠标停上去列出还差哪些空；只要还有空，"生成 PDF"是禁用的。
+- 数组块（联系方式、技能、经历、项目）可以加一条、删一条、上下移。
+- 换 `theme.en.toml` 立刻重渲，中英文版式可以来回比。
+
+改动只在浏览器里，点**保存 TOML** 才写进文件（覆盖前照样留 `.bak`）。
+它和 `fill.py` 读写的是同一份 `content.toml`，两种界面可以来回换：
+命令行填一半，网页里接着改，再回命令行都认。
+
+> ⚠️ **这个服务默认只听 `127.0.0.1`，而且没有登录、没有口令**——门禁就是"只听本机"。
+> 所以别加 `--host 0.0.0.0`：那等于把你的姓名、手机、邮箱敞开给整个局域网，
+> 别人还能写你的内容文件。程序真被这么启动时会打印一条显眼的警告。
+>
+> 它能碰的文件也被夹死在两处：内容目录下匹配 `content*.toml` 的文件（正是
+> `.gitignore` 挡住的那一批），以及生成物目录里的 .pdf / .html / .png。
+> `content.example.toml` 是仓库里跟踪的示例，可以读进来看版面，**不许写回去**。
+>
+> 真实内容想放仓库外：`python webui.py --content-dir ~/.private/resume`。
+
+**一、被问着填**（不想开浏览器就用这个）
 
 ```bash
 python fill.py
@@ -284,15 +317,19 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 
 - `schema.py` —— **字段表：这份简历一共有哪些"空"，只在这里定义一次。**
   `fill.py` 照着它提问，`fill.py --blank` 照着它生成空白表单，`render.py` 照着它
-  检查空白。加一个字段只改这一处，三边自动跟上——分开写迟早会出现"问卷问了但渲染
-  不认"的字段。
-- `fill.py` —— 填空程序。交互提问、生成空白表单、检查空白，最后写出内容 TOML。
+  检查空白，`webui.py` 照着它长出网页表单。加一个字段只改这一处，四边自动跟上——
+  分开写迟早会出现"问卷问了但渲染不认"的字段。
+  数组块上还有个 `identity`，写明"哪个字段能认出这一条"，定制版的 `[keep]` 用它。
+- `fill.py` —— 命令行填空程序。交互提问、生成空白表单、检查空白，最后写出内容 TOML。
+- `webui.py` —— 浏览器版的填空。默认只听本机，没有登录也没有口令。静态文件在 `webui/`。
+  日常维护内容时不要编辑这个文件。
 - `content.example.toml` —— 虚构示例，仓库里跟踪的就是它。改版面结构（新增技能行、
   调整经历顺序）时才动它，改完把同样的改动同步到你自己的内容文件，并跑一次
   `make preview` 刷新预览图，否则 `make check` 会拦下来。
 - `content.toml` / `content.local.toml` / `content.*.toml` —— **你要投出去的那一份。**
   全部被 gitignore。查找优先级：`content.local.toml` → `content.toml` →
-  `content.example.toml`。
+  `content.example.toml`。按公司做的定制版用 `extends` 继承其中一份，只写要改的
+  几项，见上面「按岗位做多个定制版」。
 - `theme.toml` —— 设计令牌：字体、颜色、页边距、字号、间距、线宽。每一项都会变成
   一个 CSS 变量。
 - `theme.en.toml` —— 英文版式。用 `extends = "theme.toml"` 继承上面那份，只写不同的
@@ -300,6 +337,9 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
   那么松的行距）。写英文简历时 `--theme theme.en.toml`。
 - `resume.css` —— 版式规则。文件开头写了五条设计约束，改版式前先读。
 - `render.py` —— 渲染程序。正常维护内容时不要编辑。
+- `webui/` —— 网页表单的静态文件（`index.html` / `app.css` / `app.js`）。
+  表单本身不写在这里：它由 `app.js` 照着 `schema.py` 的字段表长出来。
+- `tests/` —— 标准库 `unittest` 写的测试，`make test` 跑。跟踪。
 - `examples/preview.png` —— README 顶部那张图，由 `make preview` 生成。跟踪。
 - `examples/preview.sha256` —— 上面那张图对应的输入哈希，`make check` 用它判断图是否
   过期。跟踪，由 `make preview` 写入，不要手改。
@@ -323,6 +363,7 @@ python render.py [--content PATH] [--theme PATH] [--css PATH]
 ```
 
 - `--content` 内容 TOML 路径。省略时按上面的优先级在脚本目录里找。
+  指到定制版（写了 `extends` 的那种）时会先把继承链合并好再渲。
 - `--theme` / `--css` 换一套设计令牌或版式。英文简历用 `--theme theme.en.toml`；
   自己做变体时新建一份，开头写 `extends = "theme.toml"`，只列要改的令牌。
 - `--out-dir` 生成物目录，默认 `build/`。
@@ -330,16 +371,91 @@ python render.py [--content PATH] [--theme PATH] [--css PATH]
   再不给就是 `resume`。想投出去的附件叫 `张三-SEO-简历.pdf`，在内容文件里写
   `output_basename = "张三-SEO-简历"` 即可。
 
+```
+python webui.py [--host ADDR] [--port N] [--content-dir DIR]
+                [--out-dir DIR] [--css PATH]
+```
+
+- `--host` 绑定地址，默认 `127.0.0.1`。**这个服务没有认证**，改成 `0.0.0.0`
+  等于把真实简历敞开给整个局域网；真要这么做，外面得自己套一层认证。
+- `--port` 端口，默认 `8765`。
+- `--content-dir` 内容文件所在目录，默认本仓库目录。真实内容建议放仓库外。
+- `--out-dir` / `--css` 同 `render.py`。
+
 ---
+
+## 按岗位做多个定制版
+
+投五家公司，五份简历只差求职意向、概况和技能顺序。整份抄五遍的代价是：以后换个
+手机号要记得改五处，而人是会忘的。
+
+所以内容文件可以像 `theme.en.toml` 继承 `theme.toml` 那样，只写要改的地方：
+
+```toml
+# content.acme.toml
+extends = "content.toml"
+
+[document]
+output_basename = "张三-Acme-简历"
+
+[profile]
+intent = "独立站运营 · Google SEO"      # 只换这一句，姓名和联系方式继承
+
+[summary]
+text = "……按这家公司的 JD 重写一遍……"
+
+# 从基底的技能里挑几条，顺序也按这里给的来
+[keep]
+skills = ["Technical SEO", "数据分析", "英文内容"]
+```
+
+```bash
+python render.py --content content.acme.toml
+```
+
+合并规则三条：
+
+1. **普通表深合并**——你写了的键覆盖基底，没写的继承。改一句就只写一句。
+2. **数组表整块替换**——写了 `[[skills]]` 就用你写的那几条；没写就全继承。
+   没有"改第 2 条"这种半自动写法：基底加一条之后下标就全错位了。
+3. **`[keep]` 按天然键挑选并排序**——只是想"从 6 条里留 4 条、换个顺序"时用它，
+   比整块重写省事。每个数组块用哪个字段作键：
+
+   | 数组块 | 认哪个字段 |
+   |---|---|
+   | `skills` | `label` |
+   | `experiences` | `company` |
+   | `projects` | `title` |
+   | `contacts` | `value` |
+
+   **名字拼错会当场报错**，并把可选值列给你。它不会静默丢掉一整条经历——
+   那种错在 PDF 上看不出来，投出去才发现少了一段。
+
+继承可以多层（`基底 → 行业版 → 公司版`），成环会报错。
+
+⚠️ **定制版只能手工编辑。** `fill.py` 和网页版都是"整份重写"，会把 `extends` 和
+`[keep]` 一起抹掉，让定制版退化成一份和基底一模一样的全量拷贝——而且不报错，
+下次改基底时才发现这一份没跟着变。所以两边都会拦下来：
+
+```bash
+python fill.py --out content.acme.toml       # 报错，让你直接编辑
+python fill.py --check --out content.acme.toml   # 这个可以：检查合并后还缺什么
+```
+
+网页版可以**读**定制版（显示合并后的样子、照常预览和出 PDF），但状态栏会标明它是
+定制版、只读；点保存会被拒。
 
 ## 投递前检查
 
 1. 删掉不适用于目标岗位的技能或项目。**不要靠缩小字号硬塞。**
 2. 把 `[document]` 的 `preview_note` 和 `edition` 清空，页脚那行整条消失。
    带着"示例内容"字样投出去，等于告诉对方这是没填完的模板。
+   （网页版写出去的这两行本来就是空的。）
 3. 重新生成，确认第一行打印的是你自己的内容文件。
+   网页版看状态栏右边那个文件名，别对着示例改了半天。
 4. 打开 `build/*.png` 复核，再发 `build/*.pdf`。
-5. `git status` 应该是干净的。
+5. `git status` 应该是干净的。用过网页版的话，顺手看一眼有没有留下
+   `content.<随手起的名字>.toml`——它们都被 gitignore 挡着，但堆多了自己会认错。
 
 ## 改内容时的四个注意点
 
@@ -366,6 +482,11 @@ python render.py [--content PATH] [--theme PATH] [--css PATH]
 | 打印"虚构示例" | 没找到你的内容文件 | 检查文件名，或用 `--content` 指定 |
 | 没有 PNG | 缺 `pdftoppm` | `sudo apt install poppler-utils` |
 | 字重不对 / 伪粗体 | 回落到了 SimSun | 装 Noto Serif CJK SC，或直接用 WSL2 |
+| 网页版 `Host 头不被接受` | 用了 127.0.0.1 之外的域名进来（防 DNS 重绑定） | 用 `http://127.0.0.1:<端口>` 打开 |
+| 网页版存不了 | 文件名不是 `content*.toml`、是那份示例、或是定制版 | 换成 `content.toml` / `content.<公司>.toml`；定制版请手工编辑 |
+| `[keep] … 里写了 X，但被继承的那份里没有这一条` | 基底改了名字，定制版没跟上 | 按报错里列出的可选值改；这正是它该拦住的事 |
+| `是定制版（extends = …）` | 想用 `fill.py` 或网页版改定制版 | 直接编辑那十几行；查空白用 `fill.py --check` |
+| WSL2 里开了服务，Windows 打不开 | 极少数 WSL2 没转发 localhost | 在 Windows 浏览器里试 `http://127.0.0.1:8765`；不行就查 WSL 的 localhostForwarding |
 
 ## License
 

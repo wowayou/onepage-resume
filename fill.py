@@ -296,6 +296,23 @@ def read_existing(path: Path) -> dict:
         return {}
 
 
+def refuse_derived(path: Path, existing: dict) -> None:
+    """定制版（写了 extends 的那种）不给交互填。
+
+    这个程序是"读进来、问一遍、整份写回去"。整份写回去会把 extends 和 [keep] 一起
+    抹掉，定制版就退化成一份和基底一模一样的全量拷贝——而且不报错，下次改基底时
+    才发现这一份没跟着变。宁可在这里停下。
+    """
+    if "extends" not in existing:
+        return
+    raise SystemExit(
+        f"{path.name} 是定制版（extends = \"{existing['extends']}\"）。\n"
+        "交互填空会把整份重写，extends 和 [keep] 会被抹掉，它就变成一份全量拷贝了。\n\n"
+        f"定制版通常只有十几行，直接编辑：$EDITOR {path.name}\n"
+        f"想看它合并后还缺什么：python fill.py --check --out {path.name}"
+    )
+
+
 def write_out(path: Path, text: str) -> None:
     if path.exists():
         backup = path.with_suffix(path.suffix + ".bak")
@@ -353,13 +370,23 @@ def main(argv: list[str] | None = None) -> int:
         if not out_path.exists():
             print(red(f"{out_path} 不存在。先跑 python fill.py 填一份。"))
             return 1
-        return report_blanks(read_existing(out_path))
+        # 定制版要检查的是"合并之后"还缺什么：它自己那十几行当然到处都是空的，
+        # 那些空是由被继承的那份填上的。
+        #
+        # 在函数里 import 是有意的：render 会拉起 WeasyPrint（要 dlopen pango /
+        # cairo），而填空本身不需要渲染。放在文件顶上会让每次 fill.py 都慢一截。
+        import render
+        return report_blanks(render.load_content(out_path))
+
+    # 先看这一份是不是定制版，再看有没有终端：定制版不能整份重写这件事，
+    # 跟当前有没有终端无关，报错该说真正的原因。
+    existing = read_existing(out_path)
+    refuse_derived(out_path, existing)
 
     if not sys.stdin.isatty():
         print(red("交互填空需要终端。非交互场景请用 --blank 生成表单再编辑。"))
         return 1
 
-    existing = read_existing(out_path)
     print(bold("一页简历 · 填空"))
     print(dim("  每题回车 = 跳过或保留当前值；Ctrl-C 随时退出，不会写半份文件。"))
     if existing:

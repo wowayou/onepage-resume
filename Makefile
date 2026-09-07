@@ -3,19 +3,21 @@ VENV ?= .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
-.PHONY: help setup fill blank render example preview check clean
+.PHONY: help setup fill ui blank render example preview check test clean
 
 # README 里那张预览图的三份输入。任何一份变了，图就过期了。
 PREVIEW_SRC := content.example.toml theme.toml resume.css
 
 help:
 	@echo "make setup    创建 venv 并装依赖（系统依赖见 README）"
+	@echo "make ui       浏览器里填：左边填字，右边实时看 A4（只听本机）"
 	@echo "make fill     填空：一题一题地填出 content.toml"
 	@echo "make blank    生成一份空白表单，自己在编辑器里填"
 	@echo "make render   渲染你自己的简历到 build/"
 	@echo "make example  渲染虚构示例，用来确认环境是通的"
 	@echo "make preview  重渲示例并更新 README 里的预览图（改完示例必跑）"
 	@echo "make check    提交前的隐私体检"
+	@echo "make test     跑测试（标准库 unittest，不需要额外依赖）"
 	@echo "make clean    删掉 build/"
 
 setup:
@@ -25,6 +27,11 @@ setup:
 
 fill:
 	$(PY) fill.py
+
+# 浏览器版的填空。默认只听 127.0.0.1，同一台机器之外连不进来；
+# 这个服务没有登录也没有口令，别加 --host 0.0.0.0。
+ui:
+	$(PY) webui.py
 
 blank:
 	$(PY) fill.py --blank
@@ -44,6 +51,9 @@ preview: example
 
 check:
 	./scripts/check-privacy.sh
+
+test:
+	$(PY) -m unittest discover -s tests -v
 
 clean:
 	rm -rf build

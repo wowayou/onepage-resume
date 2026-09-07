@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- 填空表单的外壳。表单本身不写在这里：它由 app.js 照着 schema.py 的字段表
+     长出来，所以加一个字段只改 schema.py，这个文件不用动。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>一页简历 · 填空</title>
+<!-- 内嵌一张竖脊图标，省掉一次 favicon 404；也和简历上那条竖线是同一个记号 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23fff'/%3E%3Crect x='4' y='2' width='1.4' height='12' fill='%230E4F4A'/%3E%3Crect x='7.5' y='3' width='6' height='1.2' fill='%2377879A'/%3E%3Crect x='7.5' y='7.4' width='6' height='1.2' fill='%2377879A'/%3E%3Crect x='7.5' y='11.8' width='4' height='1.2' fill='%2377879A'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">
+    <strong>一页简历</strong>
+    <span class="brand-sub">填空 → 实时预览 → 出 PDF</span>
+  </div>
+
+  <div class="bar-controls">
+    <label class="control">
+      <span>内容文件</span>
+      <input id="content-name" list="content-list" spellcheck="false"
+             autocomplete="off" placeholder="content.toml">
+      <datalist id="content-list"></datalist>
+    </label>
+
+    <label class="control">
+      <span>版式</span>
+      <select id="theme-name"></select>
+    </label>
+
+    <button id="btn-load" type="button" class="ghost">读取</button>
+    <button id="btn-save" type="button" class="ghost">保存 TOML</button>
+    <button id="btn-render" type="button" class="primary">生成 PDF</button>
+  </div>
+</header>
+
+<main class="stage">
+  <section class="pane form-pane" aria-label="简历内容表单">
+    <nav id="jump" class="jump" aria-label="跳到某一块"></nav>
+    <div id="form" class="form"></div>
+    <p class="form-foot">
+      改动只在浏览器里，点<strong>保存 TOML</strong> 才写进文件（覆盖前自动留
+      <code>.bak</code>）。这个页面和 <code>python fill.py</code> 认的是同一份文件。
+    </p>
+  </section>
+
+  <section class="pane view-pane" aria-label="预览">
+    <div class="status">
+      <span id="stat-pages" class="stat">页数 —</span>
+      <span id="stat-blanks" class="stat">空白 —</span>
+      <span class="stat-gap"></span>
+      <span id="stat-file" class="stat muted"></span>
+      <span id="downloads" class="downloads"></span>
+    </div>
+
+    <div id="paper" class="paper">
+      <!-- 简历本身没有脚本；sandbox 留空表示什么都不许它做，只当纸看。 -->
+      <iframe id="sheet" title="简历预览" sandbox></iframe>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

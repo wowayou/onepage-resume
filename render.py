@@ -84,6 +84,97 @@ def load_theme(path: Path, seen: tuple[Path, ...] = ()) -> dict:
     return merged
 
 
+def load_content(path: Path, seen: tuple[Path, ...] = ()) -> dict:
+    """读一份内容文件。它可以用 extends = "content.toml" 继承另一份，只写要改的地方。
+
+    为什么要有这个：按岗位做定制版时，整份抄一遍的代价是以后改手机号要记得改五处，
+    而人是会忘的——和 theme.en.toml 继承 theme.toml 是同一个理由。
+
+    合并规则，三条：
+
+    1. **普通表深合并**：定制版写了的键覆盖基底，没写的继承。
+       所以只想换求职意向和概况，就只写那两处。
+    2. **数组表整块替换**：定制版写了 [[skills]]，就用定制版的那几条；没写就全继承。
+       半自动的"按下标改第 2 条"看着聪明，但基底加了一条之后下标就全错位了。
+    3. **[keep] 表按天然键挑选并排序**：想要的只是"从基底那 6 条技能里留 4 条、
+       换个顺序"，写数组太啰嗦。就写：
+
+           [keep]
+           skills = ["Technical SEO", "数据分析", "英文内容", "SEO 执行"]
+
+       挑的是 label 等于这些值的技能（每个数组块用哪个字段作键，见 schema.py 的
+       identity）。名字拼错会当场报错，不会静默丢掉一整条经历——那种错误在
+       PDF 上看不出来，投出去才发现少了一段。
+
+    [keep] 只是筛选指令，不是内容，合并完就从结果里摘掉。
+    """
+    if path in seen:
+        chain = " → ".join(p.name for p in (*seen, path))
+        raise SystemExit(f"错误：内容文件继承成环了：{chain}")
+
+    content = load_toml(path)
+    parent_name = content.pop("extends", None)
+    keep = content.pop("keep", None)
+
+    if not parent_name:
+        if keep:
+            raise SystemExit(
+                f"错误：{path.name} 写了 [keep] 但没有 extends。"
+                "[keep] 是从被继承的那份里挑条目用的。"
+            )
+        return content
+
+    parent_path = (path.parent / parent_name).resolve()
+    if not parent_path.exists():
+        raise SystemExit(f"错误：{path.name} 继承的 {parent_name} 不存在。")
+
+    merged = load_content(parent_path, (*seen, path))
+    if keep:
+        merged = apply_keep(merged, keep, path)
+
+    for key, value in content.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value        # 含数组表：整块替换
+    return merged
+
+
+def apply_keep(content: dict, keep: dict, source: Path) -> dict:
+    """按 [keep] 里给的天然键，从数组块里挑出要留的条目，顺序也按给的来。"""
+    blocks = {b.key: b for b in schema.BLOCKS if b.repeat and b.identity}
+
+    for block_key, wanted in keep.items():
+        block = blocks.get(block_key)
+        if block is None:
+            allowed = " / ".join(sorted(blocks))
+            raise SystemExit(
+                f"错误：{source.name} 的 [keep] 里有 {block_key}，"
+                f"但只有这些数组块支持挑选：{allowed}。"
+            )
+        if not isinstance(wanted, list):
+            raise SystemExit(
+                f"错误：{source.name} 的 [keep] {block_key} 要写成数组。"
+            )
+
+        rows = content.get(block_key) or []
+        index = {str(row.get(block.identity, "")): row for row in rows}
+        picked = []
+        for name in wanted:
+            row = index.get(str(name))
+            if row is None:
+                have = " / ".join(index) or "（空）"
+                raise SystemExit(
+                    f"错误：{source.name} 的 [keep] {block_key} 里写了 {name!r}，"
+                    f"但被继承的那份里没有这一条。\n"
+                    f"    它的 {block.identity} 可选：{have}"
+                )
+            picked.append(row)
+        content[block_key] = picked
+
+    return content
+
+
 def validate_content(content: dict, source: Path) -> None:
     """字段表在 schema.py 里，这里只负责把没填的空报到具体位置。
 
@@ -341,6 +432,33 @@ def render_png(pdf_path: Path, png_path: Path) -> bool:
     return True
 
 
+def build_stylesheet(theme: dict, css_path: Path) -> str:
+    """theme.toml 摊平出来的 CSS 变量 + 版式 CSS，拼成一份完整样式表。"""
+    return build_root_css(theme) + "\n" + css_path.read_text(encoding="utf-8")
+
+
+def write_outputs(content: dict, theme: dict, stylesheet: str,
+                  out_dir: Path, basename: str) -> dict[str, Path | None]:
+    """写出 HTML / PDF / PNG，返回各自路径；缺 pdftoppm 时 PNG 是 None。
+
+    "生成物有哪些、叫什么名字"只在这里说一次——命令行和 webui.py 都走这个函数。
+    分开写迟早会出现"网页上下载到的和命令行生成的不是同一份东西"。
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    html_path = out_dir / f"{basename}.html"
+    pdf_path = out_dir / f"{basename}.pdf"
+    png_path = out_dir / f"{basename}.png"
+
+    markup = ResumeBuilder(content, theme, stylesheet).render_html()
+    html_path.write_text(markup, encoding="utf-8")
+    render_pdf(markup, pdf_path)          # 超过一页就在这里报错，不会偷偷出第二页
+    return {
+        "html": html_path,
+        "pdf": pdf_path,
+        "png": png_path if render_png(pdf_path, png_path) else None,
+    }
+
+
 def resolve_content(explicit: str | None) -> Path:
     """--content 指定就用它；否则按 CONTENT_CANDIDATES 的顺序在脚本目录里找。"""
     if explicit:
@@ -388,31 +506,23 @@ def main(argv: list[str] | None = None) -> None:
     css_path = Path(args.css).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
 
-    content = load_toml(content_path)
+    content = load_content(content_path)
     theme = load_theme(theme_path)
     validate_content(content, content_path)
     check_fonts(theme)
 
     basename = args.name or content["document"].get("output_basename") or "resume"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    html_path = out_dir / f"{basename}.html"
-    pdf_path = out_dir / f"{basename}.pdf"
-    png_path = out_dir / f"{basename}.png"
-
-    stylesheet = build_root_css(theme) + "\n" + css_path.read_text(encoding="utf-8")
-    markup = ResumeBuilder(content, theme, stylesheet).render_html()
-
-    html_path.write_text(markup, encoding="utf-8")
-    render_pdf(markup, pdf_path)
+    stylesheet = build_stylesheet(theme, css_path)
+    outputs = write_outputs(content, theme, stylesheet, out_dir, basename)
 
     if content_path.name == EXAMPLE_CONTENT:
         print(f"内容: {content_path}（虚构示例；你自己的那份请写进 content.toml"
               " 或用 --content 指定）", file=sys.stderr)
     else:
         print(f"内容: {content_path}")
-    print(f"HTML: {html_path}")
-    print(f"PDF:  {pdf_path}")
-    print(f"PNG:  {png_path}" if render_png(pdf_path, png_path)
+    print(f"HTML: {outputs['html']}")
+    print(f"PDF:  {outputs['pdf']}")
+    print(f"PNG:  {outputs['png']}" if outputs["png"]
           else "PNG:  跳过（没有 pdftoppm，装 poppler-utils 就有了）")
 
 

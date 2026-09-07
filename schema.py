@@ -43,6 +43,12 @@ class Block:
     # 数组块在页面上有个栏目名（"工作经历"这四个字），它单独存在另一张表里
     section_key: str = ""
     section_default: str = ""
+    # 数组块里"哪个字段能认出这一条"。定制版的 [keep] 表用它来挑条目和排顺序：
+    #     [keep]
+    #     skills = ["Technical SEO", "数据分析"]
+    # 挑的是 label 等于这两个值的技能。选它作 identity 的标准是"人一眼能认出来
+    # 且同一份简历里不会重复"——所以经历用公司名，技能用标签名。
+    identity: str = ""
 
 
 DOCUMENT = Block(
@@ -83,6 +89,7 @@ CONTACTS = Block(
     intro="一条一条填，填完问你要不要再加。手机和邮箱至少留一个能打通的。",
     repeat=True,
     min_items=1,
+    identity="value",          # 联系方式没有更短的天然键，就用它本身
     fields=(
         Field("value", "联系方式的内容", "", "138-0000-0000"),
         Field("label", "前面的标签", "比如「手机」「邮箱」。链接类的（个人站、GitHub）留空更干净",
@@ -110,6 +117,7 @@ SKILLS = Block(
     min_items=1,
     section_key="skills_section",
     section_default="核心能力",
+    identity="label",
     fields=(
         Field("label", "能力标签", "两到四个字，或一个英文词组", "Technical SEO"),
         Field("text", "这条能力具体是什么", "一到两行，写工具和动作，不要写「精通」",
@@ -125,6 +133,7 @@ EXPERIENCES = Block(
     min_items=1,
     section_key="experience_section",
     section_default="工作经历",
+    identity="company",
     fields=(
         Field("company", "公司名", "", "Acme Digital"),
         Field("role", "你的职位", "", "SEO 助理 / B2B 外贸站交付"),
@@ -146,6 +155,7 @@ PROJECTS = Block(
     min_items=1,
     section_key="projects_section",
     section_default="项目作品",
+    identity="title",
     fields=(
         Field("title", "项目名", "", "个人双语博客"),
         Field("crumbs", "项目的元信息", "用 / 分隔：技术栈 / 链接 / 你的角色",
@@ -170,6 +180,41 @@ EDUCATION = Block(
 BLOCKS: tuple[Block, ...] = (
     DOCUMENT, PROFILE, CONTACTS, SUMMARY, SKILLS, EXPERIENCES, PROJECTS, EDUCATION,
 )
+
+
+# ---------- 字段表的 JSON 视图 ----------
+# webui.py 把它发给浏览器，网页表单是照着它长出来的（题干、解释、例子、
+# 是不是数组、能不能留空，全都来自这里）。所以"这份简历有哪些空"依然只在
+# 本文件里定义一次：加一个字段，命令行问卷、空白表单、渲染检查、网页表单
+# 四边一起跟上，不会出现"网页上能填但渲染不认"的字段。
+
+def describe() -> list[dict]:
+    """把 BLOCKS 摊成可 JSON 序列化的结构，字段顺序与页面顺序一致。"""
+    return [
+        {
+            "key": block.key,
+            "title": block.title,
+            "intro": block.intro,
+            "repeat": block.repeat,
+            "min_items": block.min_items,
+            "max_items": block.max_items,
+            "section_key": block.section_key,
+            "section_default": block.section_default,
+            "fields": [
+                {
+                    "key": item.key,
+                    "ask": item.ask,
+                    "hint": item.hint,
+                    "example": item.example,
+                    "kind": item.kind,
+                    "required": item.required,
+                    "default": item.default,
+                }
+                for item in block.fields
+            ],
+        }
+        for block in BLOCKS
+    ]
 
 
 # ---------- 空白检查 ----------
