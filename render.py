@@ -19,12 +19,14 @@ import html
 import shutil
 import subprocess
 import sys
-import tomllib
+import tempfile
+import urllib.parse
 from pathlib import Path
 
 from weasyprint import HTML
 
 import schema
+from content_io import load_content, load_theme, plain_name
 
 HERE = Path(__file__).resolve().parent
 
@@ -51,141 +53,18 @@ def esc(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
-def load_toml(path: Path) -> dict:
-    with path.open("rb") as stream:
-        return tomllib.load(stream)
-
-
-def load_theme(path: Path, seen: tuple[Path, ...] = ()) -> dict:
-    """读一个主题文件。它可以用 extends = "theme.toml" 继承另一个，只写要改的令牌。
-
-    这样做语言变体（中文窄竖脊 / 英文宽竖脊）不用把整份令牌抄一遍——抄一遍的
-    代价是以后改颜色要记得改两处，而人是会忘的。
-    """
-    if path in seen:
-        chain = " → ".join(p.name for p in (*seen, path))
-        raise SystemExit(f"错误：主题继承成环了：{chain}")
-
-    theme = load_toml(path)
-    parent_name = theme.pop("extends", None)
-    if not parent_name:
-        return theme
-
-    parent_path = (path.parent / parent_name).resolve()
-    if not parent_path.exists():
-        raise SystemExit(f"错误：{path.name} 继承的 {parent_name} 不存在。")
-
-    merged = load_theme(parent_path, (*seen, path))
-    for group, values in theme.items():
-        if isinstance(values, dict) and isinstance(merged.get(group), dict):
-            merged[group] = {**merged[group], **values}
-        else:
-            merged[group] = values
-    return merged
-
-
-def load_content(path: Path, seen: tuple[Path, ...] = ()) -> dict:
-    """读一份内容文件。它可以用 extends = "content.toml" 继承另一份，只写要改的地方。
-
-    为什么要有这个：按岗位做定制版时，整份抄一遍的代价是以后改手机号要记得改五处，
-    而人是会忘的——和 theme.en.toml 继承 theme.toml 是同一个理由。
-
-    合并规则，三条：
-
-    1. **普通表深合并**：定制版写了的键覆盖基底，没写的继承。
-       所以只想换求职意向和概况，就只写那两处。
-    2. **数组表整块替换**：定制版写了 [[skills]]，就用定制版的那几条；没写就全继承。
-       半自动的"按下标改第 2 条"看着聪明，但基底加了一条之后下标就全错位了。
-    3. **[keep] 表按天然键挑选并排序**：想要的只是"从基底那 6 条技能里留 4 条、
-       换个顺序"，写数组太啰嗦。就写：
-
-           [keep]
-           skills = ["Technical SEO", "数据分析", "英文内容", "SEO 执行"]
-
-       挑的是 label 等于这些值的技能（每个数组块用哪个字段作键，见 schema.py 的
-       identity）。名字拼错会当场报错，不会静默丢掉一整条经历——那种错误在
-       PDF 上看不出来，投出去才发现少了一段。
-
-    [keep] 只是筛选指令，不是内容，合并完就从结果里摘掉。
-    """
-    if path in seen:
-        chain = " → ".join(p.name for p in (*seen, path))
-        raise SystemExit(f"错误：内容文件继承成环了：{chain}")
-
-    content = load_toml(path)
-    parent_name = content.pop("extends", None)
-    keep = content.pop("keep", None)
-
-    if not parent_name:
-        if keep:
-            raise SystemExit(
-                f"错误：{path.name} 写了 [keep] 但没有 extends。"
-                "[keep] 是从被继承的那份里挑条目用的。"
-            )
-        return content
-
-    parent_path = (path.parent / parent_name).resolve()
-    if not parent_path.exists():
-        raise SystemExit(f"错误：{path.name} 继承的 {parent_name} 不存在。")
-
-    merged = load_content(parent_path, (*seen, path))
-    if keep:
-        merged = apply_keep(merged, keep, path)
-
-    for key, value in content.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = {**merged[key], **value}
-        else:
-            merged[key] = value        # 含数组表：整块替换
-    return merged
-
-
-def apply_keep(content: dict, keep: dict, source: Path) -> dict:
-    """按 [keep] 里给的天然键，从数组块里挑出要留的条目，顺序也按给的来。"""
-    blocks = {b.key: b for b in schema.BLOCKS if b.repeat and b.identity}
-
-    for block_key, wanted in keep.items():
-        block = blocks.get(block_key)
-        if block is None:
-            allowed = " / ".join(sorted(blocks))
-            raise SystemExit(
-                f"错误：{source.name} 的 [keep] 里有 {block_key}，"
-                f"但只有这些数组块支持挑选：{allowed}。"
-            )
-        if not isinstance(wanted, list):
-            raise SystemExit(
-                f"错误：{source.name} 的 [keep] {block_key} 要写成数组。"
-            )
-
-        rows = content.get(block_key) or []
-        index = {str(row.get(block.identity, "")): row for row in rows}
-        picked = []
-        for name in wanted:
-            row = index.get(str(name))
-            if row is None:
-                have = " / ".join(index) or "（空）"
-                raise SystemExit(
-                    f"错误：{source.name} 的 [keep] {block_key} 里写了 {name!r}，"
-                    f"但被继承的那份里没有这一条。\n"
-                    f"    它的 {block.identity} 可选：{have}"
-                )
-            picked.append(row)
-        content[block_key] = picked
-
-    return content
-
-
 def validate_content(content: dict, source: Path) -> None:
     """字段表在 schema.py 里，这里只负责把没填的空报到具体位置。
 
     宁可在这里停下，也不要渲染出一份带着空标题、空 bullet 的 PDF——
     那种 PDF 看上去是"成功了"的，很容易就这么发出去。
     """
+    schema.validate_types(content)
     blanks = schema.find_blanks(content)
     if not blanks:
         return
     listing = "\n".join(f"  {line}" for line in blanks)
-    raise SystemExit(
+    raise ValueError(
         f"错误：{source.name} 还有 {len(blanks)} 处空白没填：\n{listing}\n\n"
         f"补齐：python fill.py --out {source}\n"
         f"或者直接编辑 {source.name}。"
@@ -260,11 +139,19 @@ def build_root_css(theme: dict) -> str:
     """把 theme.toml 的每一项摊平成 CSS 变量，再补上 @page 和屏幕预览用的纸张尺寸。"""
     variables: dict[str, str] = {}
     for group in ("fonts", "colors", "layout", "type", "rules"):
+        if not isinstance(theme.get(group), dict):
+            raise ValueError(f"版式缺少 [{group}] 表。")
         for key, value in theme[group].items():
             variables[key] = str(value)
 
-    page = theme["page"]
-    width, height = PAPER_SIZES.get(page["size"], PAPER_SIZES["A4"])
+    page = theme.get("page")
+    if not isinstance(page, dict) or page.get("size") not in PAPER_SIZES:
+        raise ValueError("版式 [page] size 只支持 A4 或 Letter。")
+    for key in ("margin-top", "margin-side", "margin-bottom"):
+        if not isinstance(page.get(key), str) or not page[key].strip():
+            raise ValueError(f"版式 [page] 缺少有效的 {key}。")
+        variables[key] = page[key]
+    width, height = PAPER_SIZES[page["size"]]
     variables["sheet-width"] = width
     variables["sheet-height"] = height
 
@@ -274,6 +161,21 @@ def build_root_css(theme: dict) -> str:
         f":root {{\n{declarations}\n}}\n\n"
         f"@page {{ size: {page['size']}; margin: {margin}; }}\n"
     )
+
+
+def safe_href(value: str) -> str:
+    value = value.strip()
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return ""
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        return value
+    if parsed.scheme in ("mailto", "tel") and parsed.path:
+        return value
+    return ""
 
 
 class ResumeBuilder:
@@ -295,8 +197,9 @@ class ResumeBuilder:
         for item in self.content["contacts"]:
             label = str(item.get("label", "")).strip()
             text = f'{esc(label)} {esc(item["value"])}' if label else esc(item["value"])
-            if item.get("href"):
-                text = f'<a href="{esc(item["href"])}">{text}</a>'
+            href = safe_href(item.get("href", ""))
+            if href:
+                text = f'<a href="{esc(href)}">{text}</a>'
             parts.append(text)
         return " · ".join(parts)
 
@@ -427,7 +330,7 @@ def render_png(pdf_path: Path, png_path: Path) -> bool:
     subprocess.run(
         ["pdftoppm", "-png", "-r", "150", "-singlefile",
          str(pdf_path), str(png_path.with_suffix(""))],
-        check=True,
+        check=True, timeout=60,
     )
     return True
 
@@ -444,19 +347,23 @@ def write_outputs(content: dict, theme: dict, stylesheet: str,
     "生成物有哪些、叫什么名字"只在这里说一次——命令行和 webui.py 都走这个函数。
     分开写迟早会出现"网页上下载到的和命令行生成的不是同一份东西"。
     """
+    basename = plain_name(basename)
+    schema.validate_types(content)
     out_dir.mkdir(parents=True, exist_ok=True)
-    html_path = out_dir / f"{basename}.html"
-    pdf_path = out_dir / f"{basename}.pdf"
-    png_path = out_dir / f"{basename}.png"
-
+    paths = {kind: out_dir / f"{basename}.{kind}" for kind in ("html", "pdf", "png")}
+    for path in paths.values():
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError(f"生成物目标不是普通文件：{path.name}")
     markup = ResumeBuilder(content, theme, stylesheet).render_html()
-    html_path.write_text(markup, encoding="utf-8")
-    render_pdf(markup, pdf_path)          # 超过一页就在这里报错，不会偷偷出第二页
-    return {
-        "html": html_path,
-        "pdf": pdf_path,
-        "png": png_path if render_png(pdf_path, png_path) else None,
-    }
+    with tempfile.TemporaryDirectory(prefix=".resume-", dir=out_dir) as temporary:
+        staged = {kind: Path(temporary) / path.name for kind, path in paths.items()}
+        render_pdf(markup, staged["pdf"])
+        staged["html"].write_text(markup, encoding="utf-8")
+        has_png = render_png(staged["pdf"], staged["png"])
+        for kind in ("html", "pdf", "png"):
+            if kind != "png" or has_png:
+                staged[kind].replace(paths[kind])
+    return {**paths, "png": paths["png"] if has_png else None}
 
 
 def resolve_content(explicit: str | None) -> Path:
@@ -498,7 +405,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> None:
+def run(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     content_path = resolve_content(args.content)
@@ -509,10 +416,9 @@ def main(argv: list[str] | None = None) -> None:
     content = load_content(content_path)
     theme = load_theme(theme_path)
     validate_content(content, content_path)
-    check_fonts(theme)
-
     basename = args.name or content["document"].get("output_basename") or "resume"
     stylesheet = build_stylesheet(theme, css_path)
+    check_fonts(theme)
     outputs = write_outputs(content, theme, stylesheet, out_dir, basename)
 
     if content_path.name == EXAMPLE_CONTENT:
@@ -524,6 +430,13 @@ def main(argv: list[str] | None = None) -> None:
     print(f"PDF:  {outputs['pdf']}")
     print(f"PNG:  {outputs['png']}" if outputs["png"]
           else "PNG:  跳过（没有 pdftoppm，装 poppler-utils 就有了）")
+
+
+def main(argv: list[str] | None = None) -> None:
+    try:
+        run(argv)
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"错误：{error}") from error
 
 
 if __name__ == "__main__":

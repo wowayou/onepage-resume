@@ -17,15 +17,13 @@
 from __future__ import annotations
 
 import argparse
-import re
-import shutil
 import sys
-import tomllib
 from datetime import date
 from pathlib import Path
 
 import schema
-from schema import BLOCKS, Block, Field, escape
+import content_io
+from schema import BLOCKS, Block, Field, escape, split_list
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_OUT = HERE / "content.toml"
@@ -78,17 +76,6 @@ def confirm(question: str, default: bool = False) -> bool:
 
 # ---------- 问一个字段 ----------
 
-# 数组字段的分隔符：只认两侧至少一边带空白的斜杠。
-# 光按 "/" 切会把网址拆成碎片——crumbs 里正经会出现 github.com/账号/仓库，
-# 示例文件里就有一条。而"用 / 分隔"的写法本来都带空格，所以不受影响。
-LIST_SEP = re.compile(r"\s+/|/\s+")
-
-
-def split_list(text: str) -> list[str]:
-    """把 "a / b" 切成 ["a", "b"]，但 "github.com/x/y" 整条留着。"""
-    return [part.strip() for part in LIST_SEP.split(text) if part.strip()]
-
-
 def show_question(item: Field, current: object) -> None:
     print()
     print(bold(f"  {item.ask}"))
@@ -124,7 +111,11 @@ def ask_list(item: Field, current: list[str]) -> list[str]:
         show_question(item, current)
         answer = prompt().strip()
         if answer:
-            return split_list(answer)
+            values = split_list(answer)
+            if values or not item.required:
+                return values
+            print(red("    至少填写一个非空条目。"))
+            continue
         if current:
             return list(current)
         if item.default:
@@ -227,6 +218,8 @@ def collect(existing: dict) -> dict:
     total = len(BLOCKS)
     for number, block in enumerate(BLOCKS, start=1):
         content.update(ask_block(block, existing, f"[{number}/{total}]"))
+    if "status" in existing.get("document", {}):
+        content["document"]["status"] = existing["document"]["status"]
     return content
 
 
@@ -246,6 +239,7 @@ def render_value(value: object) -> str:
 
 def dump_toml(content: dict) -> str:
     """按 schema 的顺序写出去，不用第三方库——这样生成的文件里注释是我们说了算的。"""
+    schema.validate_types(content)
     out: list[str] = [
         "# 这份是你自己的简历内容，由 fill.py 生成。",
         "# 它被 .gitignore 挡住，不会进 Git。改完直接 make render。",
@@ -260,7 +254,8 @@ def dump_toml(content: dict) -> str:
 
     document = content["document"]
     for item in schema.DOCUMENT.fields:
-        out.append(f"{item.key} = {render_value(document.get(item.key, ''))}")
+        default = [] if item.kind in ("list", "lines") else ""
+        out.append(f"{item.key} = {render_value(document.get(item.key, default))}")
     out += [
         "# 页脚。要投出去的那一份留空，页脚整条消失——",
         "# 带着「示例内容」字样投出去等于告诉对方这是没填完的模板。",
@@ -300,12 +295,7 @@ def dump_toml(content: dict) -> str:
 def read_existing(path: Path) -> dict:
     if not path.exists():
         return {}
-    try:
-        with path.open("rb") as stream:
-            return tomllib.load(stream)
-    except tomllib.TOMLDecodeError as error:
-        print(red(f"警告：{path.name} 不是合法的 TOML（{error}），当成空文件重新填。"))
-        return {}
+    return content_io.load_toml(path)
 
 
 def refuse_derived(path: Path, existing: dict) -> None:
@@ -325,12 +315,10 @@ def refuse_derived(path: Path, existing: dict) -> None:
     )
 
 
-def write_out(path: Path, text: str) -> None:
-    if path.exists():
-        backup = path.with_suffix(path.suffix + ".bak")
-        shutil.copy2(path, backup)
+def write_out(path: Path, text: str, expected_revision: str | None = None) -> None:
+    backup, _ = content_io.save_content(path, text, expected_revision)
+    if backup:
         print(dim(f"旧文件已备份到 {backup.name}"))
-    path.write_text(text, encoding="utf-8")
 
 
 def report_blanks(content: dict) -> int:
@@ -355,16 +343,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out", metavar="PATH", default=str(DEFAULT_OUT),
                         help="写到哪，默认 content.toml（已在 .gitignore 里）。"
                              "写成 - 就打到标准输出，方便接管道。")
-    parser.add_argument("--blank", action="store_true",
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--blank", action="store_true",
                         help="不提问，直接输出一份空白表单，自己在编辑器里填。")
     parser.add_argument("--sample", action="store_true",
                         help="配合 --blank：把示例答案填进去，用来先看版面。")
-    parser.add_argument("--check", action="store_true",
+    mode.add_argument("--check", action="store_true",
                         help="只检查 --out 指的那个文件还有哪些空没填。")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.sample and not args.blank:
+        parser.error("--sample 必须与 --blank 一起使用。")
+    if args.out == "-" and not args.blank:
+        parser.error("--out - 只适用于 --blank，交互提示不能混入 TOML 标准输出。")
+    return args
 
 
-def main(argv: list[str] | None = None) -> int:
+def run(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     out_path = Path(args.out).expanduser().resolve()
 
@@ -373,6 +367,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.out == "-":          # 想接管道就写 --out -
             sys.stdout.write(text)
             return 0
+        # 先自己挡一道：走 write_out 的版本检查虽然也拒绝覆盖，但报出来的是
+        # "请重新读取后再保存"——空白表单没有东西可读，那句话在这里是误导。
+        if out_path.exists():
+            print(red(f"{out_path} 已存在。--blank 只用来新建空白表单，不会覆盖已有内容。"))
+            print(dim("换个 --out 名字，或直接编辑现有文件。"))
+            return 1
         write_out(out_path, text)
         print(green(f"空白表单已写到 {out_path}"))
         print(dim("在编辑器里把每个空填上，然后跑：python render.py"))
@@ -385,15 +385,13 @@ def main(argv: list[str] | None = None) -> int:
         # 定制版要检查的是"合并之后"还缺什么：它自己那十几行当然到处都是空的，
         # 那些空是由被继承的那份填上的。
         #
-        # 在函数里 import 是有意的：render 会拉起 WeasyPrint（要 dlopen pango /
-        # cairo），而填空本身不需要渲染。放在文件顶上会让每次 fill.py 都慢一截。
-        import render
-        return report_blanks(render.load_content(out_path))
+        return report_blanks(content_io.load_content(out_path))
 
     # 先看这一份是不是定制版，再看有没有终端：定制版不能整份重写这件事，
     # 跟当前有没有终端无关，报错该说真正的原因。
-    existing = read_existing(out_path)
+    existing, revision = content_io.read_snapshot(out_path) if out_path.exists() else ({}, None)
     refuse_derived(out_path, existing)
+    schema.validate_types(existing)
 
     if not sys.stdin.isatty():
         print(red("交互填空需要终端。非交互场景请用 --blank 生成表单再编辑。"))
@@ -410,13 +408,21 @@ def main(argv: list[str] | None = None) -> int:
         print("\n" + dim("已退出，没有改动任何文件。"))
         return 130
 
-    write_out(out_path, dump_toml(content))
+    write_out(out_path, dump_toml(content), revision)
     print()
     print(green(f"✓ 内容已写到 {out_path}"))
     if report_blanks(content):
         print(dim("  再跑一次 python fill.py 可以把空补上。"))
     print(dim("  下一步：python render.py（或 make render）"))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return run(argv)
+    except (ValueError, OSError) as error:
+        print(red(f"错误：{error}"), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

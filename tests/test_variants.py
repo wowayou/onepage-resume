@@ -95,7 +95,7 @@ class InheritTest(VariantTestCase):
     def test_missing_parent_is_reported(self):
         path = self.dir / "content.orphan.toml"
         path.write_text('extends = "content.nope.toml"\n', encoding="utf-8")
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises(ValueError) as caught:
             render.load_content(path)
         self.assertIn("不存在", str(caught.exception))
 
@@ -104,7 +104,7 @@ class InheritTest(VariantTestCase):
         two = self.dir / "content.two.toml"
         one.write_text('extends = "content.two.toml"\n', encoding="utf-8")
         two.write_text('extends = "content.one.toml"\n', encoding="utf-8")
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises(ValueError) as caught:
             render.load_content(one)
         self.assertIn("成环", str(caught.exception))
 
@@ -137,25 +137,25 @@ class KeepTest(VariantTestCase):
         self.assertEqual(len(merged["contacts"]), 1)
 
     def test_a_typo_fails_loudly_and_lists_the_options(self):
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises(ValueError) as caught:
             render.load_content(self.variant('[keep]\nskills = ["数据分晰"]\n'))
         message = str(caught.exception)
         self.assertIn("数据分晰", message)
         self.assertIn("数据分析", message)       # 把可选值列出来
 
     def test_a_block_that_cannot_be_picked_is_refused(self):
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises(ValueError) as caught:
             render.load_content(self.variant('[keep]\neducation = ["示例大学"]\n'))
         self.assertIn("education", str(caught.exception))
 
     def test_keep_must_be_a_list(self):
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ValueError):
             render.load_content(self.variant('[keep]\nskills = "SEO 执行"\n'))
 
     def test_keep_without_extends_is_refused(self):
         path = self.dir / "content.solo.toml"
         path.write_text('[keep]\nskills = ["SEO 执行"]\n', encoding="utf-8")
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises(ValueError) as caught:
             render.load_content(path)
         self.assertIn("extends", str(caught.exception))
 

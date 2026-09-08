@@ -18,7 +18,25 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
+
+
+INPUT_WHITESPACE = "\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+WHITESPACE_CLASS = r"[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+LIST_SEP = re.compile(rf"{WHITESPACE_CLASS}+/|/{WHITESPACE_CLASS}+")
+DOCUMENT_METADATA = ("status", "updated", "preview_note", "edition")
+
+
+def split_list(text: str) -> list[str]:
+    """与浏览器共享分隔规则，裸斜杠保留在 URL、日期等条目中。"""
+    return [part.strip(INPUT_WHITESPACE) for part in LIST_SEP.split(text)
+            if part.strip(INPUT_WHITESPACE)]
+
+
+def input_rules() -> dict[str, str]:
+    return {"list_separator": LIST_SEP.pattern, "whitespace": WHITESPACE_CLASS}
 
 
 @dataclass(frozen=True)
@@ -235,9 +253,90 @@ def _empty(value: object) -> bool:
     return False
 
 
+def find_type_errors(content: object) -> list[str]:
+    """检查结构而不要求填完，避免损坏的数据被转换或静默丢弃。"""
+    if not isinstance(content, dict):
+        return ["内容必须是一个对象（TOML 表）。"]
+    errors: list[str] = []
+    allowed = {block.key for block in BLOCKS}
+    allowed.update(block.section_key for block in BLOCKS if block.section_key)
+    for key in content.keys() - allowed:
+        errors.append(f"未知内容块：{key}")
+
+    def check_text(value: object, location: str) -> None:
+        if not isinstance(value, str):
+            errors.append(f"{location} 必须是字符串。")
+        elif any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+            errors.append(f"{location} 含有无效 Unicode 字符。")
+
+    def check_table(table: object, fields: tuple[Field, ...], location: str,
+                    metadata: tuple[str, ...] = ()) -> None:
+        if not isinstance(table, dict):
+            errors.append(f"{location} 必须是表。")
+            return
+        keys = {field.key for field in fields} | set(metadata)
+        for key in table.keys() - keys:
+            errors.append(f"{location} 未知字段：{key}")
+        for key in metadata:
+            if key in table:
+                check_text(table[key], f"{location} {key}")
+        for field in fields:
+            if field.key not in table:
+                continue
+            value = table[field.key]
+            where = f"{location} {field.key}"
+            if field.kind in ("list", "lines"):
+                if not isinstance(value, list):
+                    errors.append(f"{where} 必须是字符串数组。")
+                else:
+                    for index, entry in enumerate(value, 1):
+                        check_text(entry, f"{where}[{index}]")
+            else:
+                check_text(value, where)
+
+    for block in BLOCKS:
+        if block.section_key and block.section_key in content:
+            check_table(content[block.section_key], (Field("title", "栏目名"),),
+                        f"[{block.section_key}]")
+        if block.key not in content:
+            continue
+        value = content[block.key]
+        if block.repeat:
+            if not isinstance(value, list):
+                errors.append(f"[[{block.key}]] 必须是数组表。")
+                continue
+            for index, row in enumerate(value, 1):
+                check_table(row, block.fields, f"[[{block.key}]] 第 {index} 条")
+        else:
+            check_table(value, block.fields, f"[{block.key}]",
+                        DOCUMENT_METADATA if block.key == "document" else ())
+    return errors
+
+
+def validate_types(content: object) -> None:
+    errors = find_type_errors(content)
+    if errors:
+        raise ValueError("内容格式有误：\n" + "\n".join(errors))
+
+
 def find_blanks(content: dict) -> list[str]:
     """返回还没填的空，每条是一句能直接照着去改的话。"""
+    errors = find_type_errors(content)
+    if errors:
+        return errors
     blanks: list[str] = []
+
+    def check_fields(table: dict, block: Block, location: str) -> None:
+        for item in block.fields:
+            value = table.get(item.key)
+            if _empty(value):
+                if item.required:
+                    blanks.append(f"{location} {item.key} —— {item.ask}")
+                continue
+            if isinstance(value, list):
+                for index, entry in enumerate(value, 1):
+                    if _empty(entry):
+                        blanks.append(f"{location} {item.key}[{index}] —— 有空白条目")
 
     for block in BLOCKS:
         if block.section_key and _empty(
@@ -250,9 +349,7 @@ def find_blanks(content: dict) -> list[str]:
             if not isinstance(table, dict):
                 blanks.append(f"[{block.key}] 整块缺失 —— {block.title}")
                 continue
-            for item in block.fields:
-                if item.required and _empty(table.get(item.key)):
-                    blanks.append(f"[{block.key}] {item.key} —— {item.ask}")
+            check_fields(table, block, f"[{block.key}]")
             continue
 
         rows = content.get(block.key)
@@ -261,12 +358,10 @@ def find_blanks(content: dict) -> list[str]:
                 f"[[{block.key}]] 至少要有 {block.min_items} 条 —— {block.title}"
             )
             continue
+        if block.max_items and len(rows) > block.max_items:
+            blanks.append(f"[[{block.key}]] 最多 {block.max_items} 条 —— {block.title}")
         for index, row in enumerate(rows, start=1):
-            for item in block.fields:
-                if item.required and _empty((row or {}).get(item.key)):
-                    blanks.append(
-                        f"[[{block.key}]] 第 {index} 条的 {item.key} —— {item.ask}"
-                    )
+            check_fields(row, block, f"[[{block.key}]] 第 {index} 条的")
 
     return blanks
 
@@ -316,7 +411,7 @@ def blank_form(sample: bool = False) -> str:
                 else:
                     out.append(f'{indent}{item.key} = [\n{indent}  "",\n{indent}]')
             elif item.kind == "list":
-                items = [x.strip() for x in raw.split("/") if x.strip()]
+                items = split_list(raw)
                 inner = ", ".join(f'"{escape(x)}"' for x in items) or '""'
                 out.append(f"{indent}{item.key} = [{inner}]")
             else:
@@ -346,5 +441,5 @@ def blank_form(sample: bool = False) -> str:
 
 
 def escape(text: str) -> str:
-    """TOML 基本字符串里只需要转义反斜杠和双引号。"""
-    return text.replace("\\", "\\\\").replace('"', '\\"')
+    """转义 TOML 基本字符串，保留换行、控制字符与非 BMP 字符。"""
+    return json.dumps(text, ensure_ascii=False)[1:-1].replace("\x7f", r"\u007f")
