@@ -376,7 +376,10 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 - `scripts/bootstrap.sh` —— 开箱即用的一半：自动探测 apt / brew，把系统库和 CJK 字体
   装齐（缺才装）。被 `make boot` 调用，也能单独跑。
 - `start.cmd` —— 原生 Windows 的双击入口：检测到 WSL2 后，自动进默认发行版跑
-  `make boot`，起网页版，等端口通了再由 Windows 这边开浏览器。跟踪。
+  `make boot`，起网页版，等端口通了再由 Windows 这边开浏览器。**纯 ASCII + CRLF，
+  提示是英文的**——cmd.exe 按控制台代码页解析 .cmd，中文字节会被错读成命令
+  （见下面「排障」）。中文说明就在你正读的这份 README 里。跟踪。
+- `.gitattributes` —— 钉住行尾：`.cmd` 检出成 CRLF，其余一律 LF。跟踪。
 - `webui/` —— 网页表单的静态文件（`index.html` / `app.css` / `app.js`）。
   表单本身不写在这里：它由 `app.js` 照着 `schema.py` 的字段表长出来。
 - `tests/` —— 标准库 `unittest` 写的测试，`make test` 跑。跟踪。
@@ -528,6 +531,7 @@ python fill.py --check --out content.acme.toml   # 这个可以：检查合并�
 | `是定制版（extends = …）` | 想用 `fill.py` 或网页版改定制版 | 直接编辑那十几行；查空白用 `fill.py --check` |
 | WSL2 里开了服务，Windows 打不开 | `localhostForwarding` 被关了（默认是开的） | 在 `%UserProfile%\.wslconfig` 里写 `[wsl2]` + `localhostForwarding=true`，再 `wsl --shutdown` 重开 |
 | WSL 里 `make ui` 没弹出浏览器 | 发行版里没有 Linux 浏览器，也没装 `wslu` | 它会退到 `powershell.exe` 去开 Windows 默认浏览器；两条都不成时按提示手工打开那个网址 |
+| 双击 `start.cmd` 满屏 `'xxx' 不是内部或外部命令` | 文件被改成了 UTF-8 中文或 LF 行尾。cmd.exe 按 CP936 解析，GBK 前导字节会吃掉换行，下一行被当命令跑；LF 还会让 `goto` 找不到标签 | 保持纯 ASCII + CRLF——`.gitattributes` 和 `make test` 都会管住。别在里面写中文，写在 README 里 |
 
 ## License
 

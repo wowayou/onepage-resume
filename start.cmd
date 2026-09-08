@@ -1,79 +1,91 @@
 @echo off
 rem ============================================================
-rem  onepage-resume  Windows 双击入口
+rem  onepage-resume -- Windows double-click entry
 rem
-rem  它做的事：在默认 WSL 发行版里 cd 到本仓库，跑 make boot
-rem  （系统依赖 + venv + 渲染示例冒烟），然后把网页版 UI 起来，
-rem  并在 Windows 浏览器里打开 http://127.0.0.1:8765 。
+rem  What it does: enter the default WSL distro, cd to this repo, run
+rem  "make boot" (system deps + venv + example smoke test), start the
+rem  web UI, wait for the port, then open the browser on the Windows side.
 rem
-rem  说明：
-rem   - 需要已装 WSL2 和一个 Ubuntu 发行版。
-rem   - 本仓库若在 C:\ 盘（会映射成 /mnt/c/...），功能正常但 I/O 慢、
-rem     实时预览会迟钝；长期用建议把仓库 clone 进 WSL 的 /home 再在这里用。
-rem   - 靠 WSL2 把 127.0.0.1 转发进发行版（默认就开着）。要是关了，下面那个
-rem     等待循环会等满 30 秒然后告诉你——见 README「排障」的 localhostForwarding 一条。
+rem  Notes:
+rem   - Needs WSL2 and an Ubuntu distro.
+rem   - The repo may live on C:\ (mapped to /mnt/c/...): it works, but I/O
+rem     is slow and live preview lags. For regular use, clone into /home
+rem     inside WSL instead.
+rem   - Relies on WSL2 forwarding 127.0.0.1 into the distro, which is on by
+rem     default. If it is off, the wait loop below times out and says so.
+rem
+rem  THIS FILE IS ASCII-ONLY WITH CRLF LINE ENDINGS, ON PURPOSE.
+rem  cmd.exe parses a .cmd under the console's OEM codepage, so UTF-8 bytes
+rem  are misread -- a GBK lead byte swallows the newline and the next line
+rem  gets run as a command. LF endings break goto and labels the same way.
+rem  Both are enforced by .gitattributes and by tests/test_start_cmd.py.
+rem  Chinese documentation lives in README.md.
 rem ============================================================
 setlocal EnableExtensions
 set "BASE=%~dp0"
 if "%BASE:~-1%"=="\" set "BASE=%BASE:~0,-1%"
 
-rem ---- 0. WSL 在不在 ----
+rem ---- 0. Is WSL there? ----
 where wsl >nul 2>nul
 if errorlevel 1 goto no_wsl
 wsl.exe --status >nul 2>nul
 if errorlevel 1 goto no_wsl
 
-rem ---- 1. 确认仓库路径能被 WSL 看到 ----
+rem ---- 1. Can WSL see this repo? ----
 wsl.exe --cd "%BASE%" -e bash -lc "test -f Makefile" >nul 2>nul
 if errorlevel 1 goto not_reachable
 
-rem ---- 2. 一条命令装齐环境（幂等，已装会跳过）----
-echo [onepage-resume] 仓库（WSL 视角）：%BASE%
-echo [onepage-resume] 正在 make boot：系统依赖 + venv + 渲染示例，首次要几分钟...
+rem ---- 2. One command to set the environment up (idempotent) ----
+echo [onepage-resume] Repo: %BASE%
+echo [onepage-resume] Running make boot: system deps + venv + example render.
+echo [onepage-resume] The first run takes a few minutes.
 wsl.exe --cd "%BASE%" -e bash -lc "make boot"
 if errorlevel 1 goto boot_failed
-echo [onepage-resume] 环境就绪。
+echo [onepage-resume] Environment ready.
 
-rem ---- 3. 起网页服务（独立小窗口里跑），等服务就绪再由 Windows 这边开浏览器 ----
-rem 用 --no-open 关掉 WSL 里的自动开浏览器，避免在两边各开一个标签。
-start "onepage-resume · 网页服务" /min wsl.exe --cd "%BASE%" -e bash -lc ".venv/bin/python webui.py --no-open"
+rem ---- 3. Start the service, wait for the port, then open the browser ----
+rem --no-open turns off the WSL-side auto-open so we do not get two tabs.
+start "onepage-resume web service" /min wsl.exe --cd "%BASE%" -e bash -lc ".venv/bin/python webui.py --no-open"
 
-echo [onepage-resume] 等待网页服务就绪（最多约 30 秒）...
+echo [onepage-resume] Waiting for the web service (up to 30 seconds)...
 for /l %%i in (1,1,30) do (
     powershell -NoProfile -Command "try{if((Invoke-WebRequest 'http://127.0.0.1:8765' -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200){exit 0}}catch{exit 1}" >nul 2>nul
     if not errorlevel 1 goto up
     timeout /t 1 /nobreak >nul
 )
-echo [onepage-resume] 等了 30 秒还连不上 http://127.0.0.1:8765 。
-echo 两种可能：
-echo   - 服务没起来：看上方 make boot 的报错，或那个最小化小窗口里的报错。
-echo   - 服务起来了但 Windows 连不进去：WSL2 的 localhostForwarding 被关了，
-echo     见 README「排障」里对应的一条。
+echo [onepage-resume] Gave up after 30 seconds: cannot reach http://127.0.0.1:8765
+echo Two possible causes:
+echo   - The service never started. Check the make boot output above, or the
+echo     errors in that minimized window.
+echo   - The service is up but Windows cannot reach it: WSL2
+echo     localhostForwarding is off. See the troubleshooting table in README.md.
 goto end
 
 :up
 start "" http://127.0.0.1:8765
-echo [onepage-resume] 浏览器应已打开（http://127.0.0.1:8765）。
-echo 网页服务在那个最小化的小窗口里，关掉它即停止。
+echo [onepage-resume] Browser should be open now: http://127.0.0.1:8765
+echo The web service runs in that minimized window. Close it to stop.
 goto end
 
 :no_wsl
-echo [onepage-resume] 没检测到 WSL。
-echo 请先安装 WSL2 和一个 Ubuntu 发行版：
+echo [onepage-resume] No WSL found.
+echo Install WSL2 and an Ubuntu distro first:
 echo   wsl --install -d Ubuntu
-echo 装完重开本文件即可。
+echo Then run this file again.
 goto end
 
 :not_reachable
-echo [onepage-resume] WSL 看不到这个目录（Makefile 没找到）。
-echo 常见原因：
-echo   - 仓库放在了 WSL 文件系统里（如 \\wsl$\Ubuntu\home\...）：请在 WSL 终端里
-echo     cd 到仓库目录后直接运行：  make boot ^&^& make ui
-echo   - 默认发行版尚未完成初始化：先开一次 WSL 终端让它跑完安装。
+echo [onepage-resume] WSL cannot see this directory (no Makefile found).
+echo Common causes:
+echo   - The repo lives inside the WSL filesystem (\\wsl$\Ubuntu\home\...).
+echo     Open a WSL shell, cd to the repo, and run:  make boot ^&^& make ui
+echo   - The default distro has not finished its first-run setup. Open a WSL
+echo     terminal once and let it complete.
 goto end
 
 :boot_failed
-echo [onepage-resume] make boot 失败了。把上面的报错贴给 README 的"排障"对照。
+echo [onepage-resume] make boot failed. Match the errors above against the
+echo troubleshooting table in README.md.
 goto end
 
 :end

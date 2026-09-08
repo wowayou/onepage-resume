@@ -1,0 +1,20 @@
+# cmd.exe parses a .cmd under the console's OEM codepage and needs CRLF:
+# LF endings break `goto`/labels, and a GBK lead byte swallows the newline so
+# the next line runs as a command. Checked out as CRLF everywhere, including
+# WSL — the file is run from Windows even when the repo lives in /home.
+# tests/test_start_cmd.py asserts the same thing on the working tree.
+*.cmd text eol=crlf
+
+# Everything else: keep LF in the working tree, whatever the platform.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.toml text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+Makefile text eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.pdf binary
