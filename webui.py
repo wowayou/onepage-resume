@@ -428,6 +428,7 @@ class Handler(BaseHTTPRequestHandler):
             "contents": files,
             "protected": sorted(PROTECTED_CONTENT),
             "default_content": default,
+            "default_content_name": content_io.DEFAULT_CONTENT_NAME,
             "themes": listing(HERE, THEME_GLOB),
             "default_theme": render.DEFAULT_THEME.name,
             "content_dir": str(studio.content_dir),
@@ -483,12 +484,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_save(self) -> None:
         payload = self.body_json()
-        name = payload.get("name") or "content.toml"
+        name = payload.get("name") or content_io.DEFAULT_CONTENT_NAME
         path = safe_name(name, CONTENT_GLOB, self.studio.content_dir)
         if path.name in PROTECTED_CONTENT:
             raise ValueError(
                 f"{path.name} 是仓库里跟踪的虚构示例，不能写。"
-                "换个名字，比如 content.toml 或 content.acme.toml。"
+                f"换个名字，比如 {content_io.DEFAULT_CONTENT_NAME} 或 content.acme.toml。"
             )
 
         content = shape(payload.get("content", {}))

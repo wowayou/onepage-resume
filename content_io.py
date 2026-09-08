@@ -21,6 +21,10 @@ class ConflictError(ValueError):
 CONTENT_GLOB = "content*.toml"
 THEME_GLOB = "theme*.toml"
 
+# 默认的内容文件名。fill.py 的输出默认值、网页新建表单的默认名、render.py 的查找
+# 顺序都引用它，改一处就够。
+DEFAULT_CONTENT_NAME = "content.toml"
+
 
 def revision(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()

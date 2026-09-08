@@ -13,7 +13,7 @@ jobs:
   render-example:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 隐私体检
         run: ./scripts/check-privacy.sh
@@ -27,14 +27,14 @@ jobs:
             fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-core \
             poppler-utils
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - name: 装 Python 依赖
         run: pip install -r requirements.txt
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -62,7 +62,7 @@ jobs:
           echo "页数：$pages"
           [ "$pages" = "1" ]
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: example-resume
           path: build/example/

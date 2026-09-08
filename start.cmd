@@ -26,6 +26,9 @@ rem  Chinese documentation lives in README.md.
 rem ============================================================
 setlocal EnableExtensions
 set "BASE=%~dp0"
+rem
+rem  The web port. Must match webui.py DEFAULT_PORT.
+set "WEBUI_PORT=8765"
 if "%BASE:~-1%"=="\" set "BASE=%BASE:~0,-1%"
 
 rem ---- 0. Is WSL there? ----
@@ -111,11 +114,11 @@ rem Inside this paren block it has to stay "if not errorlevel 1": %errorlevel%
 rem would be expanded once when the block is parsed, not on each pass. Fine
 rem here, because powershell exits exactly 0 or 1.
 for /l %%i in (1,1,30) do (
-    powershell -NoProfile -Command "try{if((Invoke-WebRequest 'http://127.0.0.1:8765' -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200){exit 0}}catch{exit 1}" >nul 2>nul
+    powershell -NoProfile -Command "try{if((Invoke-WebRequest 'http://127.0.0.1:%WEBUI_PORT%' -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200){exit 0}}catch{exit 1}" >nul 2>nul
     if not errorlevel 1 goto up
     timeout /t 1 /nobreak >nul
 )
-echo [onepage-resume] Gave up after 30 seconds: cannot reach http://127.0.0.1:8765
+echo [onepage-resume] Gave up after 30 seconds: cannot reach http://127.0.0.1:%WEBUI_PORT%
 echo Two possible causes:
 echo   - The service never started. Check the make boot output above, or the
 echo     errors in that minimized window.
@@ -124,8 +127,8 @@ echo     localhostForwarding is off. See the troubleshooting table in README.md.
 goto end
 
 :up
-start "" http://127.0.0.1:8765
-echo [onepage-resume] Browser should be open now: http://127.0.0.1:8765
+start "" http://127.0.0.1:%WEBUI_PORT%
+echo [onepage-resume] Browser should be open now: http://127.0.0.1:%WEBUI_PORT%
 echo The web service runs in that minimized window. Close it to stop.
 goto end
 

@@ -77,7 +77,8 @@ async function createApp() {
   vm.runInContext(source + '\nglobalThis.app = {state, el, fromInput, toInput, touched, schedule, preview, load, save, build, updateActions};', context);
   requests.shift().reply({
     ...info, contents: [], protected: [], themes: ['theme.toml'],
-    default_theme: 'theme.toml', default_content: null, out_dir: '/tmp/build', png: true,
+    default_theme: 'theme.toml', default_content: null,
+    default_content_name: 'content.toml', out_dir: '/tmp/build', png: true,
   });
   await new Promise((resolve) => setImmediate(resolve));
   return { ...context.app, requests, timers };
