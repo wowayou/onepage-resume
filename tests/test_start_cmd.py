@@ -82,8 +82,16 @@ class StartCmdContentTest(unittest.TestCase):
 
     def test_it_waits_for_the_port_before_opening_the_browser(self):
         wait = self.text.index("Invoke-WebRequest")
-        open_at = self.text.index('start "" http://127.0.0.1:8765')
+        open_at = self.text.index('start "" http://127.0.0.1:%WEBUI_PORT%')
         self.assertLess(wait, open_at, "得先等端口通，再开浏览器")
+
+    def test_the_port_is_defined_in_exactly_one_place(self):
+        # 端口散落在轮询和开浏览器几处，改 webui.py 的默认值时会漏掉其中一处，
+        # 表现为「服务起来了但双击脚本说连不上」。收敛成一个变量。
+        self.assertIn('set "WEBUI_PORT=8765"', self.text)
+        stripped = (self.text.replace('set "WEBUI_PORT=8765"', "")
+                    .replace("%WEBUI_PORT%", ""))
+        self.assertNotIn("8765", stripped, "端口只该在 WEBUI_PORT 里写一次")
 
     def test_the_distro_after_dash_d_is_not_quoted(self):
         # wsl.exe 会把引号算进发行版名字里，然后报 WSL_E_DISTRO_NOT_FOUND。

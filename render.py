@@ -26,7 +26,7 @@ from pathlib import Path
 from weasyprint import HTML
 
 import schema
-from content_io import load_content, load_theme, plain_name
+from content_io import DEFAULT_CONTENT_NAME, load_content, load_theme, plain_name
 
 HERE = Path(__file__).resolve().parent
 
@@ -34,7 +34,7 @@ HERE = Path(__file__).resolve().parent
 # content.example.toml 是仓库里跟踪的虚构示例，只用来证明工具能跑。
 # 真实姓名、手机、邮箱、微信、学校永远不要写进 content.example.toml。
 EXAMPLE_CONTENT = "content.example.toml"
-CONTENT_CANDIDATES = ("content.local.toml", "content.toml", EXAMPLE_CONTENT)
+CONTENT_CANDIDATES = ("content.local.toml", DEFAULT_CONTENT_NAME, EXAMPLE_CONTENT)
 
 DEFAULT_THEME = HERE / "theme.toml"
 DEFAULT_CSS = HERE / "resume.css"

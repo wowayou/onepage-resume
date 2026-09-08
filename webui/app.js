@@ -36,6 +36,7 @@ const state = {
   fileRevision: null,
   listSeparator: null,
   trimPattern: null,
+  defaultContentName: '',        // 新建表单的默认文件名，来自 /api/bootstrap
 };
 
 const el = {
@@ -482,7 +483,7 @@ async function save() {
   if (!state.ready || state.loading || state.saving) return;
   const name = el.name.value.trim();
   if (!name) {
-    toast('先给内容文件起个名字，比如 content.toml', 'bad');
+    toast(`先给内容文件起个名字，比如 ${state.defaultContentName}`, 'bad');
     return;
   }
   const version = state.contentVersion;
@@ -600,6 +601,8 @@ async function boot() {
   state.blocks = info.blocks;
   state.listSeparator = new RegExp(info.input_rules.list_separator, 'u');
   state.trimPattern = new RegExp(`^${info.input_rules.whitespace}+|${info.input_rules.whitespace}+$`, 'gu');
+  state.defaultContentName = info.default_content_name;
+  el.name.placeholder = state.defaultContentName;
   state.contents = info.contents;
   state.protected = info.protected;
   state.themes = info.themes;
@@ -622,7 +625,7 @@ async function boot() {
   } else {
     state.content = emptyContent();
     state.ready = true;
-    el.name.value = 'content.toml';
+    el.name.value = state.defaultContentName;
     buildForm();
     schedule();
   }

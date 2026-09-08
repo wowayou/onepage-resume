@@ -120,7 +120,7 @@ class AtomicSaveTest(FileTestCase):
     def test_broken_existing_file_is_not_reinterpreted_as_empty(self):
         self.path.write_text('broken = "', encoding="utf-8")
         with self.assertRaises(ValueError):
-            fill.read_existing(self.path)
+            content_io.load_toml(self.path)
 
     def test_blank_form_refuses_to_overwrite_existing_data(self):
         self.path.write_text(self.text, encoding="utf-8")

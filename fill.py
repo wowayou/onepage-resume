@@ -26,7 +26,7 @@ import content_io
 from schema import BLOCKS, Block, Field, escape, split_list
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_OUT = HERE / "content.toml"
+DEFAULT_OUT = HERE / content_io.DEFAULT_CONTENT_NAME
 
 COLOR = sys.stdout.isatty()
 
@@ -290,12 +290,6 @@ def dump_toml(content: dict) -> str:
             out.append("")
 
     return "\n".join(out).rstrip() + "\n"
-
-
-def read_existing(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    return content_io.load_toml(path)
 
 
 def refuse_derived(path: Path, existing: dict) -> None:

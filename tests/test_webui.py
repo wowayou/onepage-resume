@@ -27,6 +27,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import content_io                                            # noqa: E402
 import fill                                                  # noqa: E402
 import render                                                # noqa: E402
 import schema                                                # noqa: E402
@@ -368,6 +369,8 @@ class HttpTest(ServerTestCase):
         self.assertIn("content.toml", payload["contents"])
         self.assertIn("theme.toml", payload["themes"])
         self.assertIn(render.EXAMPLE_CONTENT, payload["protected"])
+        self.assertEqual(payload["default_content_name"],
+                         content_io.DEFAULT_CONTENT_NAME)
 
     def test_reads_a_content_file(self):
         status, payload = self.json_get("/api/content?name=content.toml")
