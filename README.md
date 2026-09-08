@@ -339,7 +339,7 @@ fc-list | grep -i "Noto Sans CJK"   # 有输出才算装上了
 **boot 最后那步 `make example` 是关键。** 环境问题（缺 DLL、缺字体）会在渲染示例时
 暴露，这时候还没有牵涉你的真实数据，排查干净。
 
-### 4. 把你的真实内容文件弄过来
+### 3. 把你的真实内容文件弄过来
 
 这一份**不在**公开仓库里，得手动搬。三条路，按推荐程度：
 
@@ -353,7 +353,7 @@ fc-list | grep -i "Noto Sans CJK"   # 有输出才算装上了
 ❌ **不要**把真实内容 push 进这个公开仓库来"同步"，哪怕只是一次、哪怕马上删掉——
 Git 历史留着，GitHub 的缓存和各种镜像爬虫也留着。
 
-### 5. 生成
+### 4. 生成
 
 内容文件放在仓库里（叫 `content.toml`）：
 
@@ -375,7 +375,7 @@ cd ~/onepage-resume
 第一行会打印这次用的是哪个内容文件。看到"虚构示例"字样，说明你的文件没被找到——
 检查文件名拼写。
 
-### 6. 在 Windows 里打开 / 投递
+### 5. 在 Windows 里打开 / 投递
 
 ```bash
 explorer.exe build            # 在 Windows 资源管理器里打开生成目录
@@ -385,7 +385,7 @@ cp build/resume.pdf /mnt/c/Users/<你的Windows用户名>/Desktop/
 
 投递前肉眼过一遍 `build/resume.png`，再发 `build/resume.pdf`。
 
-### 7. 提交前体检（只有你改了工具本身才需要）
+### 6. 提交前体检（只有你改了工具本身才需要）
 
 ```bash
 make check      # 或 ./scripts/check-privacy.sh
@@ -423,9 +423,10 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 - `scripts/bootstrap.sh` —— 开箱即用的一半：自动探测 apt / brew，把系统库和 CJK 字体
   装齐（缺才装）。被 `make boot` 调用，也能单独跑。
 - `start.cmd` —— 原生 Windows 的双击入口：检测到 WSL2 后，自动进默认发行版跑
-  `make boot`，起网页版，等端口通了再由 Windows 这边开浏览器。**纯 ASCII + CRLF，
-  提示是英文的**——cmd.exe 按控制台代码页解析 .cmd，中文字节会被错读成命令
-  （见下面「排障」）。中文说明就在你正读的这份 README 里。跟踪。
+  `make boot`，起网页版，等端口通了再由 Windows 这边开浏览器。端口只在文件顶部的
+  `WEBUI_PORT` 里定义一次，改它要和 `webui.py` 的 `DEFAULT_PORT` 同步。
+  **纯 ASCII + CRLF，提示是英文的**——cmd.exe 按控制台代码页解析 .cmd，中文字节会被
+  错读成命令（见下面「排障」）。中文说明就在你正读的这份 README 里。跟踪。
 - `.gitattributes` —— 钉住行尾：`.cmd` 检出成 CRLF，其余一律 LF。跟踪。
 - `webui/` —— 网页表单的静态文件（`index.html` / `app.css` / `app.js`）。
   表单本身不写在这里：它由 `app.js` 照着 `schema.py` 的字段表长出来。

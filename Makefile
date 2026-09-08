@@ -13,18 +13,19 @@ PREVIEW_SRC := content.example.toml theme.toml resume.css render.py
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
 
 help:
-	@echo "make boot      开箱即用：一条命令装齐系统库 + 字体 + venv + 依赖并渲染示例冒烟"
-	@echo "make dist      打一个可分发的 tar.gz（内容取自 git HEAD；真实内容与 build/ 永不进）"
-	@echo "make setup    建 venv 并装 Python 依赖（系统库交给 make boot 那一步）"
-	@echo "make ui       浏览器里填：左边填字，右边实时看 A4（只听本机）"
-	@echo "make fill     填空：一题一题地填出 content.toml"
-	@echo "make blank    生成一份空白表单，自己在编辑器里填"
-	@echo "make render   渲染你自己的简历到 build/"
-	@echo "make example  渲染虚构示例，用来确认环境是通的"
-	@echo "make preview  重渲示例并更新 README 里的预览图（改完示例必跑）"
-	@echo "make check    提交前的隐私体检"
-	@echo "make test     跑 Python + Node.js 标准库回归测试（需要 Node.js 22+）"
-	@echo "make clean    删掉 build/"
+	@echo "make boot       开箱即用：一条命令装齐系统库 + 字体 + venv + 依赖并渲染示例冒烟"
+	@echo "make bootstrap  只装系统库（已经建好 venv 时用）"
+	@echo "make dist       打一个可分发的 tar.gz（内容取自 git HEAD；真实内容与 build/ 永不进）"
+	@echo "make setup      建 venv 并装 Python 依赖（系统库交给 make boot 那一步）"
+	@echo "make ui         浏览器里填：左边填字，右边实时看 A4（只听本机）"
+	@echo "make fill       填空：一题一题地填出 content.toml"
+	@echo "make blank      生成一份空白表单，自己在编辑器里填"
+	@echo "make render     渲染你自己的简历到 build/"
+	@echo "make example    渲染虚构示例，用来确认环境是通的"
+	@echo "make preview    重渲示例并更新 README 里的预览图（改完示例必跑）"
+	@echo "make check      提交前的隐私体检"
+	@echo "make test       跑 Python + Node.js 标准库回归测试（需要 Node.js 22+）"
+	@echo "make clean      删掉 build/"
 
 setup:
 	python3 -m venv $(VENV)
@@ -48,8 +49,8 @@ render:
 example:
 	$(PY) render.py --content content.example.toml --out-dir build/example
 
-# 改完 content.example.toml / theme.toml / resume.css 就跑这个，否则 README 上
-# 那张图会停留在旧内容——上一次泄漏就是这么来的。
+# 改完 PREVIEW_SRC 里任何一份就跑这个，否则 README 上那张图会停留在旧内容
+# ——上一次泄漏就是这么来的。
 preview: example
 	cp build/example/resume.png examples/preview.png
 	cat $(PREVIEW_SRC) | sha256sum | cut -d' ' -f1 > examples/preview.sha256
@@ -74,8 +75,8 @@ boot:
 bootstrap:
 	./scripts/bootstrap.sh
 
-# 可分发包：把 git HEAD 的跟踪文件打成 tar.gz（含 bootstrap.sh + Makefile + README，
-# 端到端可自包含）。注意取的是已提交内容——改完没 commit 的不会进去。
+# 可分发包：把 git HEAD 的跟踪文件打成 tar.gz（含 bootstrap.sh + Makefile + README
+# + start.cmd，端到端可自包含）。注意取的是已提交内容——改完没 commit 的不会进去。
 dist:
 	@mkdir -p dist
 	git archive --format=tar.gz --prefix=onepage-resume/ \
