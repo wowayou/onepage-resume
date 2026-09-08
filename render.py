@@ -33,8 +33,8 @@ HERE = Path(__file__).resolve().parent
 # 内容文件的查找顺序。前两个在 .gitignore 里，是"你自己的那一份"；
 # content.example.toml 是仓库里跟踪的虚构示例，只用来证明工具能跑。
 # 真实姓名、手机、邮箱、微信、学校永远不要写进 content.example.toml。
-CONTENT_CANDIDATES = ("content.local.toml", "content.toml", "content.example.toml")
 EXAMPLE_CONTENT = "content.example.toml"
+CONTENT_CANDIDATES = ("content.local.toml", "content.toml", EXAMPLE_CONTENT)
 
 DEFAULT_THEME = HERE / "theme.toml"
 DEFAULT_CSS = HERE / "resume.css"
@@ -340,6 +340,12 @@ def build_stylesheet(theme: dict, css_path: Path) -> str:
     return build_root_css(theme) + "\n" + css_path.read_text(encoding="utf-8")
 
 
+def resolve_basename(explicit: str | None, content: dict) -> str:
+    """生成物文件名主干：显式指定 > [document].output_basename > 字段默认值。"""
+    return (explicit or content["document"].get("output_basename")
+            or schema.DEFAULT_BASENAME)
+
+
 def write_outputs(content: dict, theme: dict, stylesheet: str,
                   out_dir: Path, basename: str) -> dict[str, Path | None]:
     """写出 HTML / PDF / PNG，返回各自路径；缺 pdftoppm 时 PNG 是 None。
@@ -416,7 +422,7 @@ def run(argv: list[str] | None = None) -> None:
     content = load_content(content_path)
     theme = load_theme(theme_path)
     validate_content(content, content_path)
-    basename = args.name or content["document"].get("output_basename") or "resume"
+    basename = resolve_basename(args.name, content)
     stylesheet = build_stylesheet(theme, css_path)
     check_fonts(theme)
     outputs = write_outputs(content, theme, stylesheet, out_dir, basename)

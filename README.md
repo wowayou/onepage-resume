@@ -3,7 +3,8 @@
 [![render](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml/badge.svg)](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**填空式**的一页简历生成器：`python fill.py` 一题一题地问，问完直接出 PDF / HTML / PNG。
+**填空式**的一页简历生成器：`python fill.py` 一题一题地问，问完写成一份内容 TOML，
+再 `make render` 出 PDF / HTML / PNG。
 不想被问就 `python fill.py --blank` 拿一份空白表单，在编辑器里把每个空填上。
 想边填边看版面就 `python webui.py`，浏览器里左边填字、右边实时看 A4（只听本机）。
 
@@ -73,7 +74,7 @@
    ⚠️ **不要把这些串写进脚本本身**——脚本是公开仓库的一部分，写进去等于亲手
    公开你本想拦截的东西。`.identifiers` 存在才做这项检查，不存在就跳过。
 
-4. **预览图不许过期。** README 顶部那张 `examples/preview.png` 是渲染产物：改了示例
+4. **预览图不许过期。** README 顶部那张 `examples/preview.png` 是生成物：改了示例
    内容或版式却忘了重渲，README 上就会一直挂着旧内容。`examples/preview.sha256`
    记着四份输入（`content.example.toml` + `theme.toml` + `resume.css` + `render.py`）的哈希，
    对不上 `make check` 就报错。改完示例跑一次 `make preview`，它会重渲、覆盖图片、
@@ -456,7 +457,7 @@ python render.py [--content PATH] [--theme PATH] [--css PATH]
 - `--content` 内容 TOML 路径。省略时按上面的优先级在脚本目录里找。
   指到定制版（写了 `extends` 的那种）时会先把继承链合并好再渲。
 - `--theme` / `--css` 换一套设计令牌或版式。英文简历用 `--theme theme.en.toml`；
-  自己做变体时新建一份，开头写 `extends = "theme.toml"`，只列要改的令牌。
+  自己做定制版时新建一份，开头写 `extends = "theme.toml"`，只列要改的令牌。
 - `--out-dir` 生成物目录，默认 `build/`。
 - `--name` 生成物文件名主干；不给就读 `[document]` 的 `output_basename`，
   再不给就是 `resume`。想投出去的附件叫 `张三-SEO-简历.pdf`，在内容文件里写
@@ -468,7 +469,7 @@ python render.py [--content PATH] [--theme PATH] [--css PATH]
 
 ```
 python webui.py [--host ADDR] [--port N] [--content-dir DIR]
-                [--out-dir DIR] [--css PATH]
+                [--out-dir DIR] [--css PATH] [--no-open]
 ```
 
 - `--host` 绑定地址，默认 `127.0.0.1`。**这个服务没有认证**，改成 `0.0.0.0`

@@ -1,10 +1,11 @@
 """内容文件的字段表：这份简历一共有哪些"空"，只在这里定义一次。
 
-三个地方都读它，所以加一个字段只用改这一处：
+四个地方都读它，所以加一个字段只用改这一处：
 
     fill.py            照着它一题一题地问
     fill.py --blank    照着它生成一份空白表单（喜欢在编辑器里填的人用）
     render.py          照着它检查还有哪些空没填，报到具体位置
+    webui.py           把字段表发给浏览器，网页表单照着它长出来
 
 分开写就迟早会出现"问卷问了、但渲染不认"或者"渲染要、但没人问"的字段。
 
@@ -70,6 +71,11 @@ class Block:
     identity: str = ""
 
 
+# 生成物文件名的最后兜底：--name 和 [document].output_basename 都没有时用它。
+# render.resolve_basename() 是唯一的解析入口，这里同时是字段默认值的来源。
+DEFAULT_BASENAME = "resume"
+
+
 DOCUMENT = Block(
     key="document",
     title="文件信息",
@@ -77,7 +83,7 @@ DOCUMENT = Block(
     fields=(
         Field("output_basename", "生成的文件叫什么名字（不带 .pdf）",
               "HR 收到的附件就叫这个名字，写清楚点比 resume 好",
-              "张三-SEO-简历", default="resume"),
+              "张三-SEO-简历", default=DEFAULT_BASENAME),
         Field("title", "PDF 的标题元数据",
               "在阅读器标题栏里显示，也会被一些 ATS 读走",
               "英文 SEO / 独立站运营 - 简历"),

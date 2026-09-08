@@ -6,9 +6,10 @@
 
 它和 fill.py 是同一件事的两种界面，共用同一套底座：
 
-    schema.py   字段表。网页表单是照着它长出来的，不在这里重复定义字段
-    fill.py     dump_toml()，写出去的 TOML 与命令行填的一模一样
-    render.py   排版与生成物。预览、出 PDF 都走它，不另写一套
+    schema.py      字段表。网页表单是照着它长出来的，不在这里重复定义字段
+    content_io.py  读文件、继承合并、原子保存。CLI 与浏览器共用同一套路径闸门
+    fill.py        dump_toml()，写出去的 TOML 与命令行填的一模一样
+    render.py      排版与生成物。预览、出 PDF 都走它，不另写一套
 
 所以两种界面可以来回换：命令行填一半，网页里接着改，再回命令行都认。
 
@@ -54,7 +55,7 @@ import fill
 import content_io
 import render
 import schema
-from content_io import safe_name
+from content_io import CONTENT_GLOB, THEME_GLOB, safe_name
 
 HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE / "webui"
@@ -63,8 +64,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 # 网页能读写的内容文件：与 .gitignore 的 content*.toml 同一批。
-CONTENT_GLOB = "content*.toml"
-THEME_GLOB = "theme*.toml"
+# 这两个 glob 定义在 content_io.py，网页的文件闸门与继承路径闸门共用同一份。
 # 仓库里跟踪的虚构示例：可以读进来看版面，不许写回去。
 PROTECTED_CONTENT = {render.EXAMPLE_CONTENT}
 
@@ -496,12 +496,9 @@ class Handler(BaseHTTPRequestHandler):
         if expected_revision is not None and not isinstance(expected_revision, str):
             raise ValueError("文件版本必须是字符串。")
         with self.studio.save_lock:
-            if path.exists():
-                existing = content_io.load_toml(path)
-                if "extends" in existing or "keep" in existing:
-                    raise ValueError(f"{path.name} 是定制版，请直接编辑该文件或另存新文件。")
-                schema.validate_types(existing)
-            backup, revision = content_io.save_content(path, fill.dump_toml(content), expected_revision)
+            # 定制版不许整份重写、已有文件必须先读到同一版本，都由 save_content 一处把关。
+            backup, revision = content_io.save_content(
+                path, fill.dump_toml(content), expected_revision)
         self.send_json({
             "path": str(path),
             "name": path.name,
@@ -520,11 +517,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("还有 %d 处空白没填，先补齐：\n%s"
                              % (len(blanks), "\n".join(blanks)))
 
-        basename = safe_basename(
-            payload.get("basename")
-            or content["document"].get("output_basename")
-            or "resume"
-        )
+        basename = safe_basename(render.resolve_basename(payload.get("basename"), content))
         try:
             result = self.studio.build(content, payload.get("theme"), basename)
         except RuntimeError as error:       # 超过一页

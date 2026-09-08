@@ -16,6 +16,12 @@ class ConflictError(ValueError):
     """目标文件已改变，必须重新读取后再保存。"""
 
 
+# 内容文件与版式文件的文件名规则。CLI 的继承闸门与网页的文件闸门共用这一份，
+# 只改一处就能同时放开或收紧两边。
+CONTENT_GLOB = "content*.toml"
+THEME_GLOB = "theme*.toml"
+
+
 def revision(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -59,12 +65,12 @@ def safe_name(name: str, pattern: str, base: Path) -> Path:
 
 def _load(path: Path, kind: str, seen: tuple[Path, ...],
           allowed_dir: Path | None) -> dict:
+    pattern = CONTENT_GLOB if kind == "内容文件" else THEME_GLOB
     path = path.expanduser().resolve()
     if allowed_dir is not None:
         if path.parent != allowed_dir.resolve():
             raise ValueError(f"{kind}继承路径越界：{path.name}")
-        safe_name(path.name, "content*.toml" if kind == "内容文件" else "theme*.toml",
-                  allowed_dir)
+        safe_name(path.name, pattern, allowed_dir)
     if path in seen:
         chain = " → ".join(item.name for item in (*seen, path))
         raise ValueError(f"{kind}继承成环了：{chain}")
@@ -89,9 +95,7 @@ def _load(path: Path, kind: str, seen: tuple[Path, ...],
         return data
 
     if allowed_dir is not None:
-        parent_path = safe_name(parent_name,
-                                "content*.toml" if kind == "内容文件" else "theme*.toml",
-                                allowed_dir)
+        parent_path = safe_name(parent_name, pattern, allowed_dir)
     else:
         parent_path = path.parent / parent_name
     merged = _load(parent_path, kind, (*seen, path), allowed_dir)
@@ -112,7 +116,7 @@ def load_content(path: Path, seen: tuple[Path, ...] = (), *,
 
 def load_theme(path: Path, seen: tuple[Path, ...] = (), *,
                allowed_dir: Path | None = None) -> dict:
-    return _load(path, "主题", seen, allowed_dir)
+    return _load(path, "版式", seen, allowed_dir)
 
 
 def apply_keep(content: dict, keep: dict, source: Path) -> dict:

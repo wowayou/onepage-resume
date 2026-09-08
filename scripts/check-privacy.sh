@@ -76,7 +76,7 @@ else
 fi
 
 # 5. README 里那张预览图是不是还对得上示例内容。
-#    图是渲染产物，改了示例却忘了重渲，README 上就会一直挂着旧内容——
+#    图是生成物，改了示例却忘了重渲，README 上就会一直挂着旧内容——
 #    第一版泄漏（预览图里印着手机号）正是这么发生的。
 #    examples/preview.sha256 存的是四份输入拼接后的 sha256，由 make preview 写入。
 PREVIEW_SRC="content.example.toml theme.toml resume.css render.py"
