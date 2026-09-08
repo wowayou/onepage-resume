@@ -542,14 +542,31 @@ async function build() {
   }
 }
 
+// 能内联查看的类型：新标签页里交给浏览器自带的 PDF 阅读器 / 图片查看器。
+// HTML 不给「查看」——内联打开等于让生成的页面脚本跑在本服务的源下。
+const INLINE_KINDS = new Set(['pdf', 'png']);
+
+function artifactUrl(name, inline) {
+  const suffix = inline ? '&inline=1' : '';
+  return `/api/artifact?name=${encodeURIComponent(name)}${suffix}`;
+}
+
 function showDownloads(files) {
   el.downloads.textContent = '';
   ['pdf', 'png', 'html'].forEach((kind) => {
     const name = files[kind];
     if (!name) return;
-    const link = node('a', null, kind.toUpperCase());
-    link.href = `/api/artifact?name=${encodeURIComponent(name)}`;
-    link.title = name;
+    if (INLINE_KINDS.has(kind)) {
+      const view = node('a', null, `${kind.toUpperCase()} 查看`);
+      view.href = artifactUrl(name, true);
+      view.target = '_blank';
+      view.rel = 'noopener';
+      view.title = `在浏览器里打开 ${name}`;
+      el.downloads.append(view);
+    }
+    const link = node('a', null, `${kind.toUpperCase()} 下载`);
+    link.href = artifactUrl(name, false);
+    link.title = `下载 ${name}`;
     el.downloads.append(link);
   });
 }

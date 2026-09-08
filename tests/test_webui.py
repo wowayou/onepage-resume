@@ -219,6 +219,12 @@ class DispositionTest(unittest.TestCase):
         self.assertIn(".pdf", header)
         header.encode("latin-1")           # HTTP 头必须能进 latin-1
 
+    def test_inline_switches_only_the_disposition_kind(self):
+        inline = webui.disposition("张三-简历.pdf", inline=True)
+        self.assertTrue(inline.startswith("inline; "))
+        self.assertIn("filename*=UTF-8''", inline)
+        self.assertTrue(webui.disposition("张三-简历.pdf").startswith("attachment; "))
+
 
 class OpenBrowserTest(unittest.TestCase):
     """WSL 里不能信 webbrowser：它挑 xdg-open，失败了也返回 True。
@@ -587,6 +593,25 @@ class RenderApiTest(ServerTestCase):
             self.post("/api/render", {"content": content})
         self.assertEqual(caught.exception.code, 422)
         self.assertIn("一页", caught.exception.read().decode("utf-8"))
+
+    def test_artifact_inlines_pdf_and_png_but_never_html(self):
+        _, payload = self.post(
+            "/api/render",
+            {"content": example_content(), "theme": "theme.toml", "basename": "内联-简历"},
+        )
+        files = {kind: name for kind, name in payload["files"].items() if name}
+        self.assertIn("pdf", files)
+        self.assertIn("html", files)
+        for kind, expected in (("pdf", "inline"), ("png", "inline"), ("html", "attachment")):
+            if kind not in files:
+                continue
+            name = urllib.parse.quote(files[kind])
+            with self.subTest(kind=kind):
+                _, _, headers = self.get(f"/api/artifact?name={name}&inline=1")
+                self.assertTrue(headers["Content-Disposition"].startswith(expected),
+                                headers["Content-Disposition"])
+        _, _, headers = self.get("/api/artifact?name=" + urllib.parse.quote(files["pdf"]))
+        self.assertTrue(headers["Content-Disposition"].startswith("attachment"))
 
     def test_artifact_refuses_traversal_and_other_suffixes(self):
         for bad in ("../render.py", "/etc/passwd", "resume.toml"):

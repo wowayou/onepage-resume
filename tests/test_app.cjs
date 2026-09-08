@@ -191,3 +191,26 @@ test('stale build results do not offer old downloads or re-enable generation', a
   assert.equal(app.el.render.disabled, true);
   assert.equal(app.state.building, false);
 });
+
+test('build offers view and download links, but never an inline HTML', async () => {
+  const app = await createApp();
+  app.state.previewReady = true;
+  app.state.pages = 1;
+  app.updateActions();
+  const pending = app.build();
+  app.requests.shift().reply({
+    files: { pdf: '简历.pdf', png: '简历.png', html: '简历.html' },
+    out_dir: '/tmp/build',
+  });
+  await pending;
+  const links = app.el.downloads.children.map((link) => ({
+    text: link.textContent, href: link.href, target: link.target, rel: link.rel,
+  }));
+  assert.deepEqual(links.map((link) => link.text),
+    ['PDF 查看', 'PDF 下载', 'PNG 查看', 'PNG 下载', 'HTML 下载']);
+  assert.match(links[0].href, /inline=1$/);
+  assert.equal(links[0].target, '_blank');
+  assert.equal(links[0].rel, 'noopener');
+  assert.ok(!links[1].href.includes('inline'));
+  assert.ok(!links[4].href.includes('inline'));
+});

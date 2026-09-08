@@ -79,6 +79,9 @@ ARTIFACT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".png": "image/png",
 }
+# 可以内联查看的生成物。HTML 不在其中：内联打开等于让生成的页面脚本跑在
+# 本服务的源下，而 PDF 查看器和图片只在浏览器自己的沙箱里显示。
+INLINE_TYPES = {".pdf", ".png"}
 
 MAX_BODY = 1 << 20          # 1 MiB。一页简历的 JSON 离这个上限很远
 PREVIEW_LOCK = threading.Lock()   # WeasyPrint 不保证线程安全，渲染串起来做
@@ -303,7 +306,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_bytes(self, body: bytes, content_type: str,
                    status: HTTPStatus = HTTPStatus.OK,
-                   download: str | None = None) -> None:
+                   download: str | None = None,
+                   inline: bool = False) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -314,7 +318,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'none'")
         if download:
-            self.send_header("Content-Disposition", disposition(download))
+            self.send_header("Content-Disposition", disposition(download, inline))
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -462,7 +466,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"只提供 {' / '.join(ARTIFACT_TYPES)}：{name!r}")
         if not path.is_file():
             raise FileNotFoundError(f"生成物不存在：{name}")
-        self.send_bytes(path.read_bytes(), ARTIFACT_TYPES[suffix], download=name)
+        # inline=1 让浏览器直接打开而不是下载；HTML 永远走 attachment。
+        wants_inline = (query.get("inline") or ["0"])[0].lower() in ("1", "true")
+        inline = wants_inline and suffix in INLINE_TYPES
+        self.send_bytes(path.read_bytes(), ARTIFACT_TYPES[suffix],
+                        download=name, inline=inline)
 
     def do_preview(self) -> None:
         payload = self.body_json()
@@ -525,11 +533,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(result)
 
 
-def disposition(name: str) -> str:
+def disposition(name: str, inline: bool = False) -> str:
     """Content-Disposition。HTTP 头只能放 latin-1，中文文件名走 RFC 5987。"""
     ascii_name = re.sub(r"[^\x20-\x7e]", "_", name).replace('"', "")
     quoted = urllib.parse.quote(name, safe="")
-    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
+    kind = "inline" if inline else "attachment"
+    return f"{kind}; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
 
 
 # ---------- 启动 ----------
