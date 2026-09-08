@@ -33,8 +33,9 @@ else
 fi
 
 # 3. 手机号 / 非示例邮箱
+# 排除 RFC 2606 保留的示例域名及其子域（evil.example.com 之类），只挡真实邮箱。
 hits=$(printf '%s\n' "$tracked" | xargs grep -nIE '1[3-9][0-9]{9}|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' 2>/dev/null \
-       | grep -vE '@example\.(com|org|net)' || true)
+       | grep -vE '@([A-Za-z0-9-]+\.)*example\.(com|org|net)' || true)
 if [ -n "$hits" ]; then
   bad "被跟踪的文件里出现了手机号或真实邮箱："
   printf '%s\n' "$hits" | cut -d: -f1,2 | sort -u | while read -r loc; do note "$loc"; done
@@ -77,8 +78,8 @@ fi
 # 5. README 里那张预览图是不是还对得上示例内容。
 #    图是渲染产物，改了示例却忘了重渲，README 上就会一直挂着旧内容——
 #    第一版泄漏（预览图里印着手机号）正是这么发生的。
-#    examples/preview.sha256 存的是三份输入拼接后的 sha256，由 make preview 写入。
-PREVIEW_SRC="content.example.toml theme.toml resume.css"
+#    examples/preview.sha256 存的是四份输入拼接后的 sha256，由 make preview 写入。
+PREVIEW_SRC="content.example.toml theme.toml resume.css render.py"
 STAMP="examples/preview.sha256"
 if [ -f "$STAMP" ]; then
   now=$(cat $PREVIEW_SRC | sha256sum | cut -d' ' -f1)

@@ -2,11 +2,12 @@
 VENV ?= .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
+NODE ?= node
 
 .PHONY: help boot bootstrap setup fill ui blank render example preview dist check test clean
 
-# README 里那张预览图的三份输入。任何一份变了，图就过期了。
-PREVIEW_SRC := content.example.toml theme.toml resume.css
+# README 里那张预览图的四份输入。任何一份变了，图就过期了。
+PREVIEW_SRC := content.example.toml theme.toml resume.css render.py
 
 # 可分发包的版本号：优先 git tag，没有 tag 就用提交短哈希。
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
@@ -22,7 +23,7 @@ help:
 	@echo "make example  渲染虚构示例，用来确认环境是通的"
 	@echo "make preview  重渲示例并更新 README 里的预览图（改完示例必跑）"
 	@echo "make check    提交前的隐私体检"
-	@echo "make test     跑测试（标准库 unittest，不需要额外依赖）"
+	@echo "make test     跑 Python + Node.js 标准库回归测试（需要 Node.js 22+）"
 	@echo "make clean    删掉 build/"
 
 setup:
@@ -59,6 +60,7 @@ check:
 
 test:
 	$(PY) -m unittest discover -s tests -v
+	PYTHON=$(PY) $(NODE) --test tests/test_app.cjs
 
 # 开箱即用：系统库（bootstrap）→ venv + Python 依赖（setup）→ 渲染示例冒烟。
 # 在全新机器上，只跑这一条就能确认环境通了。

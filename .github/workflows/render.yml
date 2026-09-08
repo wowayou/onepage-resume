@@ -34,6 +34,13 @@ jobs:
       - name: 装 Python 依赖
         run: pip install -r requirements.txt
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 回归测试（Python 与浏览器逻辑）
+        run: make test PY=python
+
       - name: 渲染示例
         run: python render.py --content content.example.toml --out-dir build/example
 
