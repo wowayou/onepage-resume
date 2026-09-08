@@ -35,43 +35,52 @@ wsl.exe --status >nul 2>nul
 if not "%errorlevel%"=="0" goto no_wsl
 
 rem ---- 1. Where does this repo live? ----
-rem A \\wsl.localhost\<distro>\... or \\wsl$\<distro>\... path is turned into
-rem the distro name plus a real Linux path. Handing the UNC string straight to
-rem --cd happens to work when that distro is the default one, but silently
-rem resolves into the WRONG distro when it is not -- hence the explicit -d.
+rem Three shapes, checked in this order:
+rem   \\wsl.localhost\<distro>\...  -> distro name + Linux path
+rem   Z:\...  where Z: is mapped to such a UNC  -> same, after resolving Z:
+rem   C:\...  -> handed to wsl as-is, reached through /mnt/c
+rem The middle one matters: wsl.exe cannot translate a mapped drive letter at
+rem all ("Failed to translate Z:\..."), so the letter has to be resolved back
+rem to its UNC target here first.
 set "WSLDISTRO="
 set "LINUXDIR="
-set "P=%BASE%"
-if /i "%P:~0,16%"=="\\wsl.localhost\" goto strip_localhost
-if /i "%P:~0,7%"=="\\wsl$\" goto strip_dollar
-goto on_windows_drive
+set "MAPPEDVIA="
+set "DRIVEUNC="
 
-:strip_localhost
-set "P=%P:~16%"
-goto split_unc
+call :unc_to_parts "%BASE%"
+if defined WSLDISTRO goto say_inside_wsl
 
-:strip_dollar
-set "P=%P:~7%"
-goto split_unc
+rem Not a UNC path. A drive letter may still be a mapping onto one.
+if not "%BASE:~1,2%"==":\" goto say_windows_drive
+call :drive_to_unc "%BASE:~0,2%"
+if not defined DRIVEUNC goto say_windows_drive
+set "MAPPEDVIA=%BASE:~0,2%"
+call :unc_to_parts "%DRIVEUNC%%BASE:~2%"
+if defined WSLDISTRO goto say_mapped_to_wsl
+goto say_foreign_share
 
-:split_unc
-rem Cleared first: with tokens=1*, a path that is just the distro root leaves
-rem %%b unset, and UNCREST would silently keep whatever it held before.
-set "UNCREST="
-for /f "tokens=1* delims=\" %%a in ("%P%") do (
-    set "WSLDISTRO=%%a"
-    set "UNCREST=%%b"
-)
-if not defined WSLDISTRO goto on_windows_drive
-set "LINUXDIR=/%UNCREST:\=/%"
+:say_inside_wsl
 echo [onepage-resume] Repo is inside WSL: %WSLDISTRO% : %LINUXDIR%
 goto check_repo
 
-:on_windows_drive
+:say_mapped_to_wsl
+echo [onepage-resume] %MAPPEDVIA% is mapped to %DRIVEUNC%
+echo [onepage-resume] Repo is inside WSL: %WSLDISTRO% : %LINUXDIR%
+goto check_repo
+
+:say_windows_drive
 echo [onepage-resume] Repo on a Windows drive: %BASE%
 echo [onepage-resume] Note: reached through /mnt/..., so I/O is slow and the
 echo                  live preview lags. Cloning into WSL /home is faster.
 goto check_repo
+
+:say_foreign_share
+echo [onepage-resume] %MAPPEDVIA% is mapped to %DRIVEUNC%, which is not a WSL
+echo                  filesystem, so WSL cannot reach this repo.
+echo Clone it into WSL instead, then run from a WSL shell:
+echo   git clone ^<url^> ~/onepage-resume
+echo   cd ~/onepage-resume ^&^& make boot ^&^& make ui
+goto end
 
 rem ---- 2. Can WSL actually see the repo? ----
 :check_repo
@@ -145,6 +154,52 @@ goto end
 echo [onepage-resume] make boot failed. Match the errors above against the
 echo troubleshooting table in README.md.
 goto end
+
+rem ---- Split a \\wsl.localhost\<distro>\dir or \\wsl$\<distro>\dir path ----
+rem Sets WSLDISTRO and LINUXDIR on success, leaves both empty otherwise.
+:unc_to_parts
+set "WSLDISTRO="
+set "LINUXDIR="
+set "P=%~1"
+if /i "%P:~0,16%"=="\\wsl.localhost\" goto unc_strip_localhost
+if /i "%P:~0,7%"=="\\wsl$\" goto unc_strip_dollar
+goto :eof
+:unc_strip_localhost
+set "P=%P:~16%"
+goto unc_split
+:unc_strip_dollar
+set "P=%P:~7%"
+goto unc_split
+:unc_split
+rem Cleared first: with tokens=1*, a path that is just the distro root leaves
+rem %%b unset, and UNCREST would silently keep whatever it held before.
+set "UNCREST="
+for /f "tokens=1* delims=\" %%a in ("%P%") do (
+    set "WSLDISTRO=%%a"
+    set "UNCREST=%%b"
+)
+if not defined WSLDISTRO goto :eof
+set "LINUXDIR=/%UNCREST:\=/%"
+goto :eof
+
+rem ---- Resolve a mapped drive letter to its UNC target ----
+rem Sets DRIVEUNC, or leaves it empty for a local drive. "net use Z:" prints
+rem localized labels, so the target is found by scanning for the token that
+rem starts with two backslashes rather than by reading any label.
+:drive_to_unc
+set "DRIVEUNC="
+for /f "usebackq tokens=* delims=" %%L in (`net use %~1 2^>nul`) do call :scan_unc "%%L"
+goto :eof
+:scan_unc
+set "NULINE=%~1"
+if not defined NULINE goto :eof
+for %%T in (%NULINE%) do call :take_unc "%%T"
+goto :eof
+:take_unc
+if "%~1"=="" goto :eof
+set "NUTOK=%~1"
+if "%NUTOK:~0,2%"=="\\" set "DRIVEUNC=%NUTOK%"
+goto :eof
 
 rem ---- Run one bash command in the right distro and directory ----
 rem Kept in one place so the UNC and Windows-drive cases cannot drift apart.

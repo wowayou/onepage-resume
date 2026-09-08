@@ -129,6 +129,9 @@ make ui        # 以后每次就这一条
 
 - **在 WSL 里**（`\\wsl.localhost\<发行版>\home\...`，推荐、也更快）：它会把这个
   UNC 路径拆回「发行版名 + Linux 路径」，用 `wsl -d <发行版> --cd /home/...` 进去。
+- **映射成了网络驱动器**（比如 `Z:\home\...` 指向 `\\wsl.localhost\Ubuntu-24.04`）：
+  也认。`wsl` 自己认不了盘符（会说 `Failed to translate 'Z:\...'`），所以脚本先用
+  `net use` 把盘符还原成 UNC，再按上一条处理。
 - **在 Windows 盘上**（`C:\...`）：能用，但要经 `/mnt/c` 绕一圈，I/O 慢、实时预览迟钝。
 
 走的是 WSL2 默认开着的 `localhostForwarding`；被关了的话见「排障」。
@@ -552,6 +555,7 @@ python fill.py --check --out content.acme.toml   # 这个可以：检查合并�
 | 双击 `start.cmd` 满屏 `'xxx' 不是内部或外部命令` | 文件被改成了 UTF-8 中文或 LF 行尾。cmd.exe 按 CP936 解析，GBK 前导字节会吃掉换行，下一行被当命令跑；LF 还会让 `goto` 找不到标签 | 保持纯 ASCII + CRLF——`.gitattributes` 和 `make test` 都会管住。别在里面写中文，写在 README 里 |
 | `start.cmd` 说 `No Makefile next to this script` | 双击的是一份被拷到别处（桌面 / 下载）的 `start.cmd`。它只能在仓库根目录、和 `Makefile` 并排时用 | 回仓库根目录双击；或直接在 WSL 里 `make boot && make ui` |
 | `WSL_E_DISTRO_NOT_FOUND` | 发行版名被带引号传给了 `wsl -d`，引号会算进名字里 | `-d` 后面不要加引号（`start.cmd` 里已按这个写）|
+| `wsl: Failed to translate 'Z:\...'` | 从映射成网络驱动器的 WSL 目录双击。`wsl` 认不了盘符 | `start.cmd` 现在会用 `net use` 把盘符还原成 UNC 再拆——升级到最新一版即可 |
 
 ## License
 
