@@ -110,10 +110,28 @@ make boot
 
 然后挑一种填法开始（见下），最后 `make render` 出你自己的 PDF。
 
+### 已经在 WSL 里了，怎么起？
+
+不用碰 `start.cmd`，它是给「从 Windows 那边进来」用的。在 WSL 终端里就是两条：
+
+```bash
+cd ~/onepage-resume
+make boot      # 只有第一次要跑（幂等，重复跑不会坏事）
+make ui        # 以后每次就这一条
+```
+
+`make ui` 会自己去开 Windows 那边的浏览器（走 `wslview` 或 `powershell.exe`）。
+开不成它会把网址再打一遍，手工点开 `http://127.0.0.1:8765` 一样用。
+
 **原生 Windows 用户**：装好 WSL2 + 一个 Ubuntu 发行版后，**双击仓库根目录的
 `start.cmd`** 即可——它会自动进 WSL 跑完上面三步，等端口通了再打开浏览器。
-（把仓库放在 C:\ 盘也能用，只是 I/O 慢、实时预览会迟钝；长期用建议克隆进 WSL 的
-`/home`。走的是 WSL2 默认开着的 `localhostForwarding`；被关了的话见「排障」。）
+仓库放在哪都行，两种位置它都认：
+
+- **在 WSL 里**（`\\wsl.localhost\<发行版>\home\...`，推荐、也更快）：它会把这个
+  UNC 路径拆回「发行版名 + Linux 路径」，用 `wsl -d <发行版> --cd /home/...` 进去。
+- **在 Windows 盘上**（`C:\...`）：能用，但要经 `/mnt/c` 绕一圈，I/O 慢、实时预览迟钝。
+
+走的是 WSL2 默认开着的 `localhostForwarding`；被关了的话见「排障」。
 
 ### 打一个可分发的包
 
@@ -532,6 +550,8 @@ python fill.py --check --out content.acme.toml   # 这个可以：检查合并�
 | WSL2 里开了服务，Windows 打不开 | `localhostForwarding` 被关了（默认是开的） | 在 `%UserProfile%\.wslconfig` 里写 `[wsl2]` + `localhostForwarding=true`，再 `wsl --shutdown` 重开 |
 | WSL 里 `make ui` 没弹出浏览器 | 发行版里没有 Linux 浏览器，也没装 `wslu` | 它会退到 `powershell.exe` 去开 Windows 默认浏览器；两条都不成时按提示手工打开那个网址 |
 | 双击 `start.cmd` 满屏 `'xxx' 不是内部或外部命令` | 文件被改成了 UTF-8 中文或 LF 行尾。cmd.exe 按 CP936 解析，GBK 前导字节会吃掉换行，下一行被当命令跑；LF 还会让 `goto` 找不到标签 | 保持纯 ASCII + CRLF——`.gitattributes` 和 `make test` 都会管住。别在里面写中文，写在 README 里 |
+| `start.cmd` 说 `No Makefile next to this script` | 双击的是一份被拷到别处（桌面 / 下载）的 `start.cmd`。它只能在仓库根目录、和 `Makefile` 并排时用 | 回仓库根目录双击；或直接在 WSL 里 `make boot && make ui` |
+| `WSL_E_DISTRO_NOT_FOUND` | 发行版名被带引号传给了 `wsl -d`，引号会算进名字里 | `-d` 后面不要加引号（`start.cmd` 里已按这个写）|
 
 ## License
 

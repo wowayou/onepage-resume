@@ -85,6 +85,42 @@ class StartCmdContentTest(unittest.TestCase):
         open_at = self.text.index('start "" http://127.0.0.1:8765')
         self.assertLess(wait, open_at, "得先等端口通，再开浏览器")
 
+    def test_the_distro_after_dash_d_is_not_quoted(self):
+        # wsl.exe 会把引号算进发行版名字里，然后报 WSL_E_DISTRO_NOT_FOUND。
+        import re
+        quoted = re.findall(r'-d\s+"', self.text)
+        self.assertEqual(
+            quoted, [],
+            'wsl.exe 的 -d 后面不能加引号：它会把引号当成名字的一部分，'
+            "答 WSL_E_DISTRO_NOT_FOUND",
+        )
+
+    def test_wsl_failures_are_checked_by_comparison_not_if_errorlevel(self):
+        """`if errorlevel 1` 是「≥ 1」，接不住 wsl.exe 的 -1。
+
+        括号块里例外：那里 %errorlevel% 会在解析期就被展开成定值，只能用
+        `if not errorlevel 1`，而那一处判的是 powershell 的 0/1，够用。
+        """
+        import re
+        lines = self.text.splitlines()
+        depth = 0
+        offenders = []
+        for no, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if re.match(r"(?i)^rem\b", stripped):
+                continue
+            in_block = depth > 0
+            depth += line.count("(") - line.count(")")
+            if in_block:
+                continue
+            if re.search(r"(?i)\bif\s+errorlevel\s+1\b", stripped):
+                offenders.append(f"{no}: {stripped}")
+        self.assertEqual(
+            offenders, [],
+            "这些地方用了 `if errorlevel 1`，接不住负的退出码，"
+            f'请改成 `if not "%errorlevel%"=="0"`：{offenders}',
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
