@@ -1,8 +1,8 @@
 /* 填空表单的前端。
  *
  * 一条主线：表单里的每一次输入都写进 state.content，防抖 400ms 之后 POST 给
- * /api/preview，右边那张纸就是服务器用 render.py 真渲出来的 HTML——不是另写一套
- * 前端排版。所以预览里看到的换行、页数，和最后 PDF 里的完全一致。
+ * /api/preview，优先显示同一排版引擎生成的 PDF 页面图；缺少 pdftoppm 时
+ * 明确标注为 HTML 近似预览，页数仍由 PDF 排版引擎计算。
  *
  * 表单本身不在这里定义：/api/bootstrap 把 schema.py 的字段表发过来，
  * buildForm() 照着长。加字段只改 schema.py，这个文件不用动。
@@ -11,7 +11,6 @@
 'use strict';
 
 const PREVIEW_DELAY = 400;      // 打字停下 400ms 才渲染，别每敲一个字都渲
-const SHEET_WIDTH = 818;        // 与 app.css 的 --sheet-w 一致
 
 const state = {
   blocks: [],                   // 字段表
@@ -22,7 +21,21 @@ const state = {
   outDir: '',
   dirty: false,                 // 有没有未保存的改动
   timer: null,
-  inflight: null,               // 正在飞的预览请求，用来取消
+  inflight: false,
+  ready: false,
+  loading: false,
+  saving: false,
+  building: false,
+  contentVersion: 0,
+  previewVersion: 0,
+  previewReady: false,
+  previewWidth: 794,
+  pages: null,
+  blanks: [],
+  fileName: null,
+  fileRevision: null,
+  listSeparator: null,
+  trimPattern: null,
 };
 
 const el = {
@@ -36,6 +49,7 @@ const el = {
   pages: document.getElementById('stat-pages'),
   blanks: document.getElementById('stat-blanks'),
   file: document.getElementById('stat-file'),
+  mode: document.getElementById('stat-mode'),
   downloads: document.getElementById('downloads'),
   toast: document.getElementById('toast'),
   load: document.getElementById('btn-load'),
@@ -87,18 +101,18 @@ function toInput(field, value) {
   return value == null ? '' : String(value);
 }
 
-// 数组字段的分隔符：只认两侧至少一边带空白的斜杠。和 fill.py 的 LIST_SEP 一致——
-// 光按 '/' 切会把 github.com/账号/仓库 拆成三段，读取再保存就把内容改坏了。
-const LIST_SEP = /\s+\/|\/\s+/;
-
 function fromInput(field, raw) {
   if (field.kind === 'list') {
-    return raw.split(LIST_SEP).map((x) => x.trim()).filter(Boolean);
+    return raw.split(state.listSeparator).map(trimInput).filter(Boolean);
   }
   if (field.kind === 'lines') {
-    return raw.split('\n').map((x) => x.trim()).filter(Boolean);
+    return raw.split('\n').map(trimInput).filter(Boolean);
   }
   return raw;
+}
+
+function trimInput(value) {
+  return value.replace(state.trimPattern, '');
 }
 
 // 这几个空天生要写成几行字，给它们 textarea 而不是单行输入框。
@@ -317,6 +331,7 @@ function buildForm() {
 /* ---------- 预览 ---------- */
 
 function touched() {
+  state.contentVersion += 1;
   state.dirty = true;
   el.save.classList.add('dirty');
   schedule();
@@ -324,35 +339,60 @@ function touched() {
 
 function schedule() {
   clearTimeout(state.timer);
+  state.previewVersion += 1;
+  state.previewReady = false;
   el.paper.classList.add('stale');
+  el.pages.textContent = '页数 — 校验中';
+  el.pages.className = 'stat';
+  el.blanks.textContent = '空白 —';
+  el.blanks.className = 'stat';
+  el.downloads.textContent = '';
+  updateActions();
   state.timer = setTimeout(preview, PREVIEW_DELAY);
 }
 
 async function preview() {
-  if (state.inflight) state.inflight.abort();   // 上一次还没回来就不要它了
-  const controller = new AbortController();
-  state.inflight = controller;
+  if (!state.ready || state.loading || state.inflight) return;
+  const version = state.previewVersion;
+  state.inflight = true;
 
   try {
     const result = await api('/api/preview', {
       method: 'POST',
-      signal: controller.signal,
       body: JSON.stringify({ content: state.content, theme: el.theme.value }),
     });
+    if (version !== state.previewVersion) return;
     // srcdoc 而不是 innerHTML：iframe 里是一份完整文档，也让 sandbox 隔离生效
-    el.sheet.srcdoc = result.html;
+    el.sheet.srcdoc = result.preview_html || result.html;
+    state.previewWidth = result.width;
+    el.paper.style.setProperty('--sheet-w', `${result.width}px`);
+    el.paper.style.setProperty('--sheet-h', `${result.height}px`);
+    el.mode.textContent = result.preview_mode === 'pdf' ? 'PDF 实渲' : 'HTML 近似';
+    el.mode.title = result.preview_mode === 'pdf'
+      ? `显示前 ${result.shown_pages} 页，与 PDF 使用同一排版`
+      : '未安装 pdftoppm，换行仅供参考；页数仍以 PDF 排版为准';
+    state.previewReady = true;
     showPages(result.pages);
     showBlanks(result.blanks);
     el.paper.classList.remove('stale');
+    fitPaper();
   } catch (error) {
-    if (error.name === 'AbortError') return;
+    if (version !== state.previewVersion) return;
+    el.pages.textContent = '预览失败';
+    el.pages.className = 'stat bad';
     toast(`预览失败：${error.message}`, 'bad');
   } finally {
-    if (state.inflight === controller) state.inflight = null;
+    state.inflight = false;
+    updateActions();
+    if (version !== state.previewVersion) {
+      clearTimeout(state.timer);
+      state.timer = setTimeout(preview, PREVIEW_DELAY);
+    }
   }
 }
 
 function showPages(pages) {
+  state.pages = pages;
   if (pages === 1) {
     el.pages.textContent = '页数 1 ✓';
     el.pages.className = 'stat good';
@@ -363,19 +403,31 @@ function showPages(pages) {
 }
 
 function showBlanks(blanks) {
+  state.blanks = blanks || [];
   const count = (blanks || []).length;
   el.blanks.textContent = count ? `空白 ${count} 处` : '空白 0 ✓';
   el.blanks.className = count ? 'stat warn' : 'stat good';
   el.blanks.title = count ? blanks.join('\n') : '';
-  el.render.disabled = count > 0;
-  el.render.title = count ? '还有空没填，补齐后才能出 PDF' : '';
+  updateActions();
+}
+
+function updateActions() {
+  el.load.disabled = state.loading || state.saving;
+  el.save.disabled = !state.ready || state.loading || state.saving;
+  const reason = !state.ready || state.loading ? '先读取一份内容'
+    : state.building ? '正在生成 PDF'
+      : !state.previewReady ? '等待当前内容预览校验'
+        : state.blanks.length ? '还有空没填，补齐后才能出 PDF'
+          : state.pages !== 1 ? '内容超过一页，请先精简' : '';
+  el.render.disabled = Boolean(reason);
+  el.render.title = reason;
 }
 
 /** 把 A4 那张纸缩放到当前栏宽。 */
 function fitPaper() {
   const room = el.paper.clientWidth - 32;       // 减掉 padding
   // 栏被折叠（窄屏把预览藏起来）时 clientWidth 是 0，不能让 scale 变成负数。
-  const scale = Math.max(0.25, Math.min(1, room / SHEET_WIDTH));
+  const scale = Math.max(0.1, Math.min(1, room / state.previewWidth));
   el.paper.style.setProperty('--scale', scale.toFixed(4));
 }
 
@@ -393,10 +445,22 @@ function readOnlyNote(result) {
 }
 
 async function load(name) {
+  if (state.loading || state.saving) return;
   if (state.dirty && !confirm('当前改动还没保存，读取会丢掉它们。继续？')) return;
+  const version = state.contentVersion;
+  state.loading = true;
+  updateActions();
   try {
     const result = await api(`/api/content?name=${encodeURIComponent(name)}`);
+    if (version !== state.contentVersion) {
+      toast('读取期间又有修改，已保留当前表单；需要切换时请重新读取。', 'bad');
+      return;
+    }
     state.content = result.content;
+    state.ready = true;
+    state.contentVersion += 1;
+    state.fileName = result.name;
+    state.fileRevision = result.revision;
     el.name.value = result.name;
     el.file.textContent = readOnlyNote(result);
     clean();
@@ -404,21 +468,37 @@ async function load(name) {
     schedule();
   } catch (error) {
     toast(`读取失败：${error.message}`, 'bad');
+  } finally {
+    state.loading = false;
+    updateActions();
+    if (state.ready && !state.previewReady) {
+      clearTimeout(state.timer);
+      state.timer = setTimeout(preview, PREVIEW_DELAY);
+    }
   }
 }
 
 async function save() {
+  if (!state.ready || state.loading || state.saving) return;
   const name = el.name.value.trim();
   if (!name) {
     toast('先给内容文件起个名字，比如 content.toml', 'bad');
     return;
   }
+  const version = state.contentVersion;
+  state.saving = true;
+  updateActions();
   try {
     const result = await api('/api/save', {
       method: 'POST',
-      body: JSON.stringify({ name, content: state.content }),
+      body: JSON.stringify({
+        name, content: state.content,
+        revision: name === state.fileName ? state.fileRevision : null,
+      }),
     });
-    clean();
+    state.fileName = result.name;
+    state.fileRevision = result.revision;
+    if (version === state.contentVersion) clean();
     el.file.textContent = result.name;
     if (!state.contents.includes(result.name)) {
       state.contents.push(result.name);
@@ -426,14 +506,20 @@ async function save() {
     }
     const tail = result.backup ? `，旧文件备份为 ${result.backup}` : '';
     toast(`已写入 ${result.path}${tail}`, 'good');
-    showBlanks(result.blanks);
+    if (version === state.contentVersion) showBlanks(result.blanks);
   } catch (error) {
     toast(`保存失败：${error.message}`, 'bad', 5200);
+  } finally {
+    state.saving = false;
+    updateActions();
   }
 }
 
 async function build() {
-  el.render.disabled = true;
+  if (el.render.disabled) return;
+  const version = state.previewVersion;
+  state.building = true;
+  updateActions();
   try {
     const result = await api('/api/render', {
       method: 'POST',
@@ -442,12 +528,17 @@ async function build() {
         theme: el.theme.value,
       }),
     });
-    showDownloads(result.files);
-    toast(`已生成到 ${result.out_dir}`, 'good');
+    if (version === state.previewVersion) {
+      showDownloads(result.files);
+      toast(`已生成到 ${result.out_dir}`, 'good');
+    } else {
+      toast('生成期间内容已变化，旧版本已生成；请为当前内容重新生成 PDF。');
+    }
   } catch (error) {
     toast(error.message, 'bad', 6500);
   } finally {
-    el.render.disabled = false;
+    state.building = false;
+    updateActions();
   }
 }
 
@@ -490,6 +581,8 @@ async function boot() {
   }
 
   state.blocks = info.blocks;
+  state.listSeparator = new RegExp(info.input_rules.list_separator, 'u');
+  state.trimPattern = new RegExp(`^${info.input_rules.whitespace}+|${info.input_rules.whitespace}+$`, 'gu');
   state.contents = info.contents;
   state.protected = info.protected;
   state.themes = info.themes;
@@ -504,13 +597,14 @@ async function boot() {
   });
 
   if (!info.png) {
-    toast('没装 pdftoppm，PNG 预览图会跳过（PDF 照常生成）。', '', 4200);
+    toast('没装 pdftoppm，使用 HTML 近似预览；PDF 照常生成。', '', 4200);
   }
 
   if (info.default_content) {
     await load(info.default_content);
   } else {
     state.content = emptyContent();
+    state.ready = true;
     el.name.value = 'content.toml';
     buildForm();
     schedule();
@@ -543,5 +637,5 @@ window.addEventListener('beforeunload', (event) => {
   event.returnValue = '';
 });
 
+updateActions();
 boot();
-

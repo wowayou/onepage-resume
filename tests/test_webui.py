@@ -64,9 +64,9 @@ class ShapeTest(unittest.TestCase):
         shaped = webui.shape({"profile": {"name": "李四", "facts": ["北京", "可远程"]}})
         self.assertEqual(shaped["profile"]["facts"], ["北京", "可远程"])
 
-    def test_accepts_string_for_list_field(self):
-        shaped = webui.shape({"profile": {"facts": "北京"}})
-        self.assertEqual(shaped["profile"]["facts"], ["北京"])
+    def test_rejects_string_for_list_field(self):
+        with self.assertRaisesRegex(ValueError, "字符串数组"):
+            webui.shape({"profile": {"facts": "北京"}})
 
     def test_fills_missing_blocks_without_inventing_content(self):
         shaped = webui.shape({})
@@ -85,13 +85,19 @@ class ShapeTest(unittest.TestCase):
         shaped = webui.shape({"document": {"status": "example"}})
         self.assertEqual(shaped["document"]["status"], "example")
 
-    def test_drops_non_dict_rows(self):
-        shaped = webui.shape({"skills": ["不是表", {"label": "SEO", "text": "关键词"}]})
-        self.assertEqual(len(shaped["skills"]), 1)
+    def test_rejects_non_dict_rows(self):
+        with self.assertRaisesRegex(ValueError, "必须是表"):
+            webui.shape({"skills": ["不是表", {"label": "SEO", "text": "关键词"}]})
 
-    def test_strips_blank_entries_from_lists(self):
+    def test_keeps_blank_entries_visible_to_validation(self):
         shaped = webui.shape({"experiences": [{"bullets": ["做了事", "  ", ""]}]})
-        self.assertEqual(shaped["experiences"][0]["bullets"], ["做了事"])
+        self.assertEqual(shaped["experiences"][0]["bullets"], ["做了事", "  ", ""])
+        self.assertTrue(any("bullets[2]" in blank for blank in schema.find_blanks(shaped)))
+
+    def test_explicit_empty_section_title_is_not_replaced(self):
+        shaped = webui.shape({"skills_section": {"title": ""}})
+        self.assertEqual(shaped["skills_section"]["title"], "")
+        self.assertTrue(any("skills_section" in blank for blank in schema.find_blanks(shaped)))
 
 
 class PreviewShapeTest(unittest.TestCase):
@@ -200,11 +206,10 @@ class PathGateTest(unittest.TestCase):
                     webui.safe_name(bad, webui.CONTENT_GLOB, ROOT)
 
     def test_basename_cannot_escape_the_output_dir(self):
-        self.assertEqual(webui.safe_basename("../../etc/passwd"), "etcpasswd")
         self.assertEqual(webui.safe_basename("张三-SEO-简历"), "张三-SEO-简历")
-        self.assertEqual(webui.safe_basename("   "), "resume")
-        self.assertEqual(webui.safe_basename("..."), "resume")
-        self.assertNotIn("/", webui.safe_basename("a/b"))
+        for name in ("../../etc/passwd", "   ", "...", "a/b", "a\\b", "C:resume", "NUL"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                webui.safe_basename(name)
 
 
 class DispositionTest(unittest.TestCase):
@@ -319,11 +324,11 @@ class ServerTestCase(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=60) as response:
             return response.status, response.read(), response.headers
 
-    def post(self, path: str, payload: dict):
+    def post(self, path: str, payload: dict, headers: dict | None = None):
         request = urllib.request.Request(
             self.base + path,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **(headers or {})},
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=120) as response:
@@ -380,6 +385,76 @@ class HttpTest(ServerTestCase):
     def test_localhost_host_header_is_fine(self):
         self.assertEqual(self.get("/api/bootstrap", host="localhost")[0], 200)
 
+    def test_malformed_and_foreign_hosts_are_rejected(self):
+        for host in ("localhost:bad", "localhost:1", "localhost@evil.example.com",
+                     "localhost/extra", "[::1]junk", "localhost#fragment"):
+            with self.subTest(host=host), self.assertRaises(urllib.error.HTTPError) as caught:
+                self.get("/api/bootstrap", host=host)
+            self.assertEqual(caught.exception.code, 421)
+
+    def test_cross_origin_writes_are_rejected(self):
+        for origin in ("https://evil.example.com", "null", "http://localhost:1"):
+            with self.subTest(origin=origin), self.assertRaises(urllib.error.HTTPError) as caught:
+                self.post("/api/save", {"name": "content.csrf.toml", "content": {}},
+                          headers={"Origin": origin})
+            self.assertEqual(caught.exception.code, 403)
+        self.assertFalse((self.dir / "content.csrf.toml").exists())
+
+    def test_text_plain_json_is_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/save", {"content": {}}, headers={"Content-Type": "text/plain"})
+        self.assertEqual(caught.exception.code, 400)
+
+    def test_same_origin_json_is_accepted(self):
+        status, _ = self.post("/api/save", {"name": "content.origin.toml", "content": {}},
+                              headers={"Origin": self.base})
+        self.assertEqual(status, 200)
+
+    def test_privacy_headers_are_present(self):
+        _, _, headers = self.get("/")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["X-Frame-Options"], "DENY")
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+
+    def test_bad_content_shapes_return_400(self):
+        for content in (None, [], "bad", {"skills": [1]}, {"profile": {"name": 5}},
+                        {"skills_section": ["bad"]}, {"profile": {"facts": [None]}},
+                        {"profile": {"name": "\ud800"}}, {"unknown": {}}):
+            with self.subTest(content=content), self.assertRaises(urllib.error.HTTPError) as caught:
+                self.post("/api/preview", {"content": content})
+            self.assertEqual(caught.exception.code, 400)
+
+    def test_invalid_inheritance_returns_json_without_dropping_connection(self):
+        variants = {
+            "missing": 'extends = "content.absent.toml"',
+            "cycle": 'extends = "content.cycle.toml"',
+            "empty": 'extends = ""',
+            "type": 'extends = ["content.toml"]',
+            "outside": 'extends = "../content.toml"',
+            "glob": 'extends = "theme.toml"',
+            "keep": '[keep]\nskills = ["不存在"]',
+        }
+        for name, text in variants.items():
+            (self.dir / f"content.{name}.toml").write_text(text, encoding="utf-8")
+            with self.subTest(name=name), self.assertRaises(urllib.error.HTTPError) as caught:
+                self.get(f"/api/content?name=content.{name}.toml")
+            self.assertEqual(caught.exception.code, 400)
+            self.assertIn("error", json.loads(caught.exception.read()))
+        self.assertEqual(self.get("/api/bootstrap")[0], 200)
+
+    def test_variant_is_read_only(self):
+        path = self.dir / "content.variant.toml"
+        path.write_text('extends = "content.toml"\n[profile]\nintent = "新意向"', encoding="utf-8")
+        _, loaded = self.json_get("/api/content?name=content.variant.toml")
+        self.assertFalse(loaded["writable"])
+        self.assertEqual(loaded["content"]["profile"]["intent"], "新意向")
+        original = path.read_bytes()
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/save", {"name": path.name, "revision": loaded["revision"],
+                                   "content": loaded["content"]})
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(path.read_bytes(), original)
+
 
 class PreviewApiTest(ServerTestCase):
     def test_example_content_previews_as_one_page(self):
@@ -390,6 +465,24 @@ class PreviewApiTest(ServerTestCase):
         self.assertEqual(payload["pages"], 1)
         self.assertEqual(payload["blanks"], [])
         self.assertIn("张三", payload["html"])
+        self.assertEqual(payload["preview_mode"], "pdf")
+        self.assertIn("data:image/png;base64,", payload["preview_html"])
+        self.assertAlmostEqual(payload["width"], 210 * 96 / 25.4)
+
+    def test_missing_converter_is_explicitly_approximate(self):
+        with mock.patch.object(webui.shutil, "which", return_value=None):
+            _, payload = self.post("/api/preview", {"content": example_content()})
+        self.assertEqual(payload["preview_mode"], "html")
+        self.assertNotIn("preview_html", payload)
+        self.assertEqual(payload["pages"], 1)
+
+    def test_overflow_preview_shows_two_actual_pages(self):
+        content = example_content()
+        content["experiences"] *= 3
+        _, payload = self.post("/api/preview", {"content": content})
+        self.assertGreater(payload["pages"], 1)
+        self.assertEqual(payload["shown_pages"], 2)
+        self.assertEqual(payload["preview_html"].count("data:image/png;base64,"), 2)
 
     def test_empty_form_still_previews_and_reports_blanks(self):
         status, payload = self.post("/api/preview", {"content": {}})
@@ -419,8 +512,30 @@ class SaveApiTest(ServerTestCase):
         self.assertIsNone(first["backup"])
         self.assertTrue((self.dir / "content.acme.toml").exists())
 
-        _, second = self.post("/api/save", payload)
+        _, second = self.post("/api/save", {**payload, "revision": first["revision"]})
         self.assertEqual(second["backup"], "content.acme.toml.bak")
+
+    def test_stale_save_is_rejected_without_touching_file_or_backup(self):
+        payload = {"name": "content.conflict.toml", "content": example_content()}
+        _, first = self.post("/api/save", payload)
+        payload["content"]["summary"]["text"] = "其他窗口的新内容"
+        _, second = self.post("/api/save", {**payload, "revision": first["revision"]})
+        path = self.dir / payload["name"]
+        backup = path.with_suffix(".toml.bak")
+        before = (path.read_bytes(), backup.read_bytes())
+        for revision in (None, first["revision"]):
+            with self.subTest(revision=revision), self.assertRaises(urllib.error.HTTPError) as caught:
+                self.post("/api/save", {**payload, "revision": revision})
+            self.assertEqual(caught.exception.code, 409)
+            self.assertEqual((path.read_bytes(), backup.read_bytes()), before)
+        self.assertNotEqual(first["revision"], second["revision"])
+
+    def test_multiline_text_survives_save_and_reload(self):
+        content = example_content()
+        content["summary"]["text"] = '第一行\n第二行\r\n引号 " 与 \\ 制表符\t和 \x7f 😀'
+        self.post("/api/save", {"name": "content.multiline.toml", "content": content})
+        _, loaded = self.json_get("/api/content?name=content.multiline.toml")
+        self.assertEqual(loaded["content"]["summary"]["text"], content["summary"]["text"])
 
     def test_saved_file_is_valid_toml_with_no_blanks(self):
         self.post("/api/save", {"name": "content.round.toml",

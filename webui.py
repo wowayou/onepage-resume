@@ -31,16 +31,19 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import copy
 import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
-import tomllib
 import urllib.parse
 import webbrowser
 from http import HTTPStatus
@@ -48,8 +51,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import fill
+import content_io
 import render
 import schema
+from content_io import safe_name
 
 HERE = Path(__file__).resolve().parent
 WEB_DIR = HERE / "webui"
@@ -77,6 +82,7 @@ ARTIFACT_TYPES = {
 
 MAX_BODY = 1 << 20          # 1 MiB。一页简历的 JSON 离这个上限很远
 PREVIEW_LOCK = threading.Lock()   # WeasyPrint 不保证线程安全，渲染串起来做
+PREVIEW_PAGE_LIMIT = 2
 
 
 # ---------- 表单 JSON ←→ 内容文件 ----------
@@ -84,12 +90,8 @@ PREVIEW_LOCK = threading.Lock()   # WeasyPrint 不保证线程安全，渲染串
 def _value(field: schema.Field, raw: object) -> object:
     """把表单交上来的一个值收成字段表要求的形状。"""
     if field.kind in ("list", "lines"):
-        if isinstance(raw, list):
-            return [str(x).strip() for x in raw if str(x).strip()]
-        if raw in (None, ""):
-            return []
-        return [str(raw).strip()]
-    return "" if raw is None else str(raw)
+        return list(raw) if raw is not None else []
+    return "" if raw is None else raw
 
 
 def shape(payload: dict) -> dict:
@@ -98,13 +100,14 @@ def shape(payload: dict) -> dict:
     只补形状（缺的表、缺的键），不替用户编内容：空着的就是空着，
     这样 schema.find_blanks() 和 render.py 才能照旧把空白逐条报出来。
     """
+    schema.validate_types(payload)
     content: dict = {}
     for block in schema.BLOCKS:
         given = payload.get(block.key)
 
         if block.section_key:
-            title = ((payload.get(block.section_key) or {}).get("title") or "").strip()
-            content[block.section_key] = {"title": title or block.section_default}
+            title = payload.get(block.section_key, {}).get("title", block.section_default)
+            content[block.section_key] = {"title": title}
 
         if not block.repeat:
             table = given if isinstance(given, dict) else {}
@@ -117,14 +120,13 @@ def shape(payload: dict) -> dict:
         content[block.key] = [
             {f.key: _value(f, (row or {}).get(f.key)) for f in block.fields}
             for row in rows
-            if isinstance(row, dict)
         ]
 
     # status 不是版面上的字段（fill.py 也只是原样写回），但要保住读进来的那个值，
     # 免得把 content.example.toml 的 "example" 在网页里存成 "real"。
     given_doc = payload.get("document")
     if isinstance(given_doc, dict) and given_doc.get("status"):
-        content["document"]["status"] = str(given_doc["status"])
+        content["document"]["status"] = given_doc["status"]
     return content
 
 
@@ -133,7 +135,7 @@ def for_preview(content: dict) -> dict:
 
     只用于渲染，不写盘——写盘走 shape() 的原样，空就是空。
     """
-    preview = json.loads(json.dumps(content))       # 深拷贝，别动调用方的 dict
+    preview = copy.deepcopy(content)
     for block in schema.BLOCKS:
         if block.repeat and not preview.get(block.key):
             preview[block.key] = [
@@ -148,30 +150,19 @@ def for_preview(content: dict) -> dict:
 
 # ---------- 路径闸门 ----------
 
-def safe_name(name: str, pattern: str, base: Path) -> Path:
-    """把用户给的文件名收成 base 下的一个确切路径，越界就拒绝。
-
-    只收纯文件名：带 / 、带 .. 、带盘符的一律挡掉，再用 glob 卡一次白名单，
-    最后比对 resolve() 之后的父目录——符号链接也绕不过去。
-    """
-    if not name or name != Path(name).name or name.startswith("."):
-        raise ValueError(f"文件名不合法：{name!r}")
-    if not Path(name).match(pattern):
-        raise ValueError(f"只接受匹配 {pattern} 的文件：{name!r}")
-    path = (base / name).resolve()
-    if path.parent != base.resolve():
-        raise ValueError(f"路径越界：{name!r}")
-    return path
-
-
 def safe_basename(name: str) -> str:
-    """生成物的文件名主干。中文照常，但不许出现路径分隔符和前导点。"""
-    cleaned = re.sub(r"[\\/\x00-\x1f]", "", str(name)).strip().lstrip(".")
-    return cleaned[:120] or "resume"
+    return content_io.plain_name(name)
 
 
 def listing(base: Path, pattern: str) -> list[str]:
-    return sorted(p.name for p in base.glob(pattern) if p.is_file())
+    names = []
+    for path in base.glob(pattern):
+        try:
+            if safe_name(path.name, pattern, base).is_file():
+                names.append(path.name)
+        except ValueError:
+            continue
+    return sorted(names)
 
 
 # ---------- 渲染 ----------
@@ -183,14 +174,15 @@ class Studio:
         self.content_dir = content_dir
         self.out_dir = out_dir
         self.css_path = css_path
+        self.save_lock = threading.Lock()
 
     def theme(self, name: str | None) -> dict:
         path = safe_name(name or render.DEFAULT_THEME.name, THEME_GLOB, HERE)
         if not path.exists():
             raise ValueError(f"版式文件不存在：{path.name}")
-        return render.load_theme(path)
+        return render.load_theme(path, allowed_dir=HERE)
 
-    def preview(self, content: dict, theme_name: str | None) -> tuple[str, int]:
+    def preview(self, content: dict, theme_name: str | None) -> dict:
         """返回预览用的 HTML 和它实际占的页数。
 
         页数是这个工具的核心承诺（超一页就拒绝生成），所以预览阶段就把它算出来
@@ -200,8 +192,36 @@ class Studio:
         stylesheet = render.build_stylesheet(theme, self.css_path)
         markup = render.ResumeBuilder(for_preview(content), theme, stylesheet).render_html()
         with PREVIEW_LOCK:
-            pages = len(render.HTML(string=markup, base_url=str(HERE)).render().pages)
-        return markup, pages
+            document = render.HTML(string=markup, base_url=str(HERE)).render()
+            pages = document.pages
+            result = {"html": markup, "pages": len(pages), "preview_mode": "html",
+                      "width": pages[0].width + 24, "height": pages[0].height + 48,
+                      "shown_pages": 1}
+            if not shutil.which("pdftoppm"):
+                return result
+            shown = pages[:PREVIEW_PAGE_LIMIT]
+            with tempfile.TemporaryDirectory(prefix="resume-preview-") as temporary:
+                directory = Path(temporary)
+                pdf_path = directory / "preview.pdf"
+                document.copy(shown).write_pdf(pdf_path)
+                subprocess.run(
+                    ["pdftoppm", "-png", "-r", "110", str(pdf_path), str(directory / "page")],
+                    check=True, capture_output=True, timeout=60,
+                )
+                images = []
+                for index, path in enumerate(sorted(directory.glob("page-*.png")), 1):
+                    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                    images.append(f'<img alt="第 {index} 页" src="data:image/png;base64,{encoded}">')
+            if len(images) != len(shown):
+                raise RuntimeError("PDF 预览转换未生成预期页数。")
+            result.update({
+                "preview_html": '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+                                '<style>html,body{margin:0}img{display:block;width:100%}</style>'
+                                '<body>' + ''.join(images) + '</body></html>',
+                "preview_mode": "pdf", "shown_pages": len(shown),
+                "width": pages[0].width, "height": sum(page.height for page in shown),
+            })
+        return result
 
     def build(self, content: dict, theme_name: str | None, basename: str) -> dict:
         theme = self.theme(theme_name)
@@ -241,20 +261,41 @@ class Handler(BaseHTTPRequestHandler):
         换成 --host 0.0.0.0 就没法这么判了（人家用什么域名进来都对），
         那种场景的门禁本来也不该由这一层负责。
         """
-        try:
-            if not ipaddress.ip_address(self.bind_host).is_loopback:
-                return True
-        except ValueError:
-            return True                      # 主机名形式的绑定，交给上层去管
-
+        if not ipaddress.ip_address(self.server.server_address[0]).is_loopback:
+            return True
         raw = self.headers.get("Host", "")
-        host = raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
-        if host.startswith("["):             # IPv6 字面量：[::1]:8765
-            host = host[1:host.find("]")] if "]" in host else host[1:]
-        if host in ("localhost", ""):
+        try:
+            if len(self.headers.get_all("Host", [])) != 1:
+                return False
+            parsed = urllib.parse.urlsplit("//" + raw)
+            if (not parsed.hostname or parsed.username is not None or parsed.path
+                    or parsed.query or parsed.fragment):
+                return False
+            if parsed.port is not None and parsed.port != self.server.server_port:
+                return False
+            host = parsed.hostname
+            authority = f"[{host}]" if ":" in host else host
+            if raw.lower() not in (authority, f"{authority}:{parsed.port}"):
+                return False
+            if host == "localhost":
+                return True
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def allowed_origin(self) -> bool:
+        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+            return False
+        origin = self.headers.get("Origin")
+        if origin is None:
             return True
         try:
-            return ipaddress.ip_address(host).is_loopback
+            expected = urllib.parse.urlsplit("http://" + self.headers.get("Host", ""))
+            actual = urllib.parse.urlsplit(origin)
+            return (actual.scheme == "http" and actual.hostname == expected.hostname
+                    and (actual.port or 80) == (expected.port or 80)
+                    and not actual.path and not actual.query and not actual.fragment
+                    and actual.username is None)
         except ValueError:
             return False
 
@@ -270,6 +311,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'none'")
         if download:
             self.send_header("Content-Disposition", disposition(download))
         self.end_headers()
@@ -284,6 +327,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"error": message}, status)
 
     def body_json(self) -> dict:
+        if self.headers.get_content_type() != "application/json":
+            raise ValueError("只接受 application/json 请求。")
+        if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) != 1:
+            raise ValueError("请求必须带唯一的 Content-Length。")
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             raise ValueError("请求体是空的。")
@@ -308,6 +355,9 @@ class Handler(BaseHTTPRequestHandler):
     def route(self) -> None:
         if not self.allowed_host():
             self.fail(HTTPStatus.MISDIRECTED_REQUEST, "Host 头不被接受。")
+            return
+        if not self.allowed_origin():
+            self.fail(HTTPStatus.FORBIDDEN, "不接受跨站请求，请从本服务页面操作。")
             return
 
         parsed = urllib.parse.urlparse(self.path)
@@ -338,10 +388,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.do_render()
             else:
                 self.fail(HTTPStatus.NOT_FOUND, "没有这个地址。")
-        except ValueError as error:                     # 含 JSON / TOML 解析失败
+        except content_io.ConflictError as error:
+            self.fail(HTTPStatus.CONFLICT, str(error))
+        except (ValueError, RecursionError) as error:
             self.fail(HTTPStatus.BAD_REQUEST, str(error))
         except FileNotFoundError as error:
             self.fail(HTTPStatus.NOT_FOUND, str(error))
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as error:                      # noqa: BLE001 - 兜底成 JSON
             self.log_error("%s %s 出错：%r", self.command, path, error)
             self.fail(HTTPStatus.INTERNAL_SERVER_ERROR, f"{type(error).__name__}: {error}")
@@ -366,6 +420,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         self.send_json({
             "blocks": schema.describe(),
+            "input_rules": schema.input_rules(),
             "contents": files,
             "protected": sorted(PROTECTED_CONTENT),
             "default_content": default,
@@ -382,14 +437,13 @@ class Handler(BaseHTTPRequestHandler):
         if not path.is_file():
             raise FileNotFoundError(f"内容文件不存在：{path.name}")
 
-        with path.open("rb") as stream:
-            raw = tomllib.load(stream)             # 坏 TOML → ValueError → 400
+        raw, revision = content_io.read_snapshot(path)
 
         # 定制版（写了 extends）：显示合并后的样子，但不给存。
         # 存盘是整份重写，会把 extends 和 [keep] 抹平成全量拷贝，而且不报错——
         # 下次改基底时才发现这一份没跟着变。所以只读，改它请直接编辑那十几行。
         derives_from = raw.get("extends")
-        content = render.load_content(path) if derives_from else raw
+        content = render.load_content(path, allowed_dir=self.studio.content_dir)
 
         self.send_json({
             "name": path.name,
@@ -397,27 +451,25 @@ class Handler(BaseHTTPRequestHandler):
             "blanks": schema.find_blanks(content),
             "writable": path.name not in PROTECTED_CONTENT and not derives_from,
             "extends": derives_from,
+            "revision": revision,
         })
 
     def artifact(self, query: dict) -> None:
         name = (query.get("name") or [""])[0]
-        if not name or name != Path(name).name or name.startswith("."):
-            raise ValueError(f"文件名不合法：{name!r}")
+        path = safe_name(name, "*", self.studio.out_dir)
         suffix = Path(name).suffix
         if suffix not in ARTIFACT_TYPES:
             raise ValueError(f"只提供 {' / '.join(ARTIFACT_TYPES)}：{name!r}")
-        path = (self.studio.out_dir / name).resolve()
-        if path.parent != self.studio.out_dir.resolve() or not path.is_file():
+        if not path.is_file():
             raise FileNotFoundError(f"生成物不存在：{name}")
         self.send_bytes(path.read_bytes(), ARTIFACT_TYPES[suffix], download=name)
 
     def do_preview(self) -> None:
         payload = self.body_json()
-        content = shape(payload.get("content") or {})
-        markup, pages = self.studio.preview(content, payload.get("theme"))
+        content = shape(payload.get("content", {}))
+        preview = self.studio.preview(content, payload.get("theme"))
         self.send_json({
-            "html": markup,
-            "pages": pages,
+            **preview,
             "blanks": schema.find_blanks(content),
         })
 
@@ -431,31 +483,28 @@ class Handler(BaseHTTPRequestHandler):
                 "换个名字，比如 content.toml 或 content.acme.toml。"
             )
 
-        if path.exists():
-            with path.open("rb") as stream:
-                if "extends" in tomllib.load(stream):
-                    raise ValueError(
-                        f"{path.name} 是定制版（有 extends），不能从网页存回去——"
-                        "整份重写会把 extends 和 [keep] 抹掉，它就变成全量拷贝了。"
-                        "改它请直接编辑那个文件；或者换个文件名另存一份。"
-                    )
-
-        content = shape(payload.get("content") or {})
-        backup = None
-        if path.exists():                   # 与 fill.py 一致：覆盖前留一份 .bak
-            backup = path.with_suffix(path.suffix + ".bak")
-            shutil.copy2(path, backup)
-        path.write_text(fill.dump_toml(content), encoding="utf-8")
+        content = shape(payload.get("content", {}))
+        expected_revision = payload.get("revision")
+        if expected_revision is not None and not isinstance(expected_revision, str):
+            raise ValueError("文件版本必须是字符串。")
+        with self.studio.save_lock:
+            if path.exists():
+                existing = content_io.load_toml(path)
+                if "extends" in existing or "keep" in existing:
+                    raise ValueError(f"{path.name} 是定制版，请直接编辑该文件或另存新文件。")
+                schema.validate_types(existing)
+            backup, revision = content_io.save_content(path, fill.dump_toml(content), expected_revision)
         self.send_json({
             "path": str(path),
             "name": path.name,
             "backup": backup.name if backup else None,
+            "revision": revision,
             "blanks": schema.find_blanks(content),
         })
 
     def do_render(self) -> None:
         payload = self.body_json()
-        content = shape(payload.get("content") or {})
+        content = shape(payload.get("content", {}))
         blanks = schema.find_blanks(content)
         if blanks:
             # 和 render.py 同一个立场：宁可停下，也不出一份带空标题的 PDF——
@@ -532,19 +581,19 @@ def _open_soon(url: str, delay: float = 0.6) -> None:
 
 def serve(host: str, port: int, studio: Studio, open_browser: bool = True) -> None:
     handler = type("BoundHandler", (Handler,), {"studio": studio, "bind_host": host})
-    server = ThreadingHTTPServer((host, port), handler)
+    server_type = type("StudioServer", (ThreadingHTTPServer,), {
+        "address_family": socket.AF_INET6 if ":" in host else socket.AF_INET,
+    })
+    server = server_type((host, port), handler)
     shown = f"[{host}]" if ":" in host else host
-    url = f"http://{shown}:{port}"
+    url = f"http://{shown}:{server.server_port}"
 
     # flush：make ui 之类的场景 stdout 不是终端，缓冲会让这几行迟迟不出来，
     # 而用户正等着这个网址。
     print(f"填空表单：  {url}", flush=True)
     print(f"内容目录：  {studio.content_dir}")
     print(f"生成物：    {studio.out_dir}")
-    try:
-        is_loopback = ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        is_loopback = False
+    is_loopback = ipaddress.ip_address(server.server_address[0]).is_loopback
     if not is_loopback:
         print()
         print("⚠️  警告：这个服务没有登录、没有口令，门禁就是「只听本机」。")

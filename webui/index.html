@@ -32,8 +32,8 @@
     </label>
 
     <button id="btn-load" type="button" class="ghost">读取</button>
-    <button id="btn-save" type="button" class="ghost">保存 TOML</button>
-    <button id="btn-render" type="button" class="primary">生成 PDF</button>
+    <button id="btn-save" type="button" class="ghost" disabled>保存 TOML</button>
+    <button id="btn-render" type="button" class="primary" disabled>生成 PDF</button>
   </div>
 </header>
 
@@ -51,6 +51,7 @@
     <div class="status">
       <span id="stat-pages" class="stat">页数 —</span>
       <span id="stat-blanks" class="stat">空白 —</span>
+      <span id="stat-mode" class="stat muted"></span>
       <span class="stat-gap"></span>
       <span id="stat-file" class="stat muted"></span>
       <span id="downloads" class="downloads"></span>
@@ -58,7 +59,9 @@
 
     <div id="paper" class="paper">
       <!-- 简历本身没有脚本；sandbox 留空表示什么都不许它做，只当纸看。 -->
-      <iframe id="sheet" title="简历预览" sandbox></iframe>
+      <div class="paper-fit">
+        <iframe id="sheet" title="简历预览" sandbox></iframe>
+      </div>
     </div>
   </section>
 </main>
