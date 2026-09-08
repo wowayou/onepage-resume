@@ -75,7 +75,8 @@ async function api(path, options = {}) {
 }
 
 /* ---------- 值的编辑形态 ----------
- * kind=list  一行里用 / 分隔（面包屑、关键词那种短词组）
+ * kind=list  一行里用「空格 / 空格」分隔（面包屑、关键词那种短词组）。
+ *            只有两侧至少一边带空白的斜杠才算分隔符，所以网址能整条写进去。
  * kind=lines 一行一条（bullet 那种）
  * 这两种在 TOML 里都是数组，只是在输入框里的写法不同。
  */
@@ -86,9 +87,13 @@ function toInput(field, value) {
   return value == null ? '' : String(value);
 }
 
+// 数组字段的分隔符：只认两侧至少一边带空白的斜杠。和 fill.py 的 LIST_SEP 一致——
+// 光按 '/' 切会把 github.com/账号/仓库 拆成三段，读取再保存就把内容改坏了。
+const LIST_SEP = /\s+\/|\/\s+/;
+
 function fromInput(field, raw) {
   if (field.kind === 'list') {
-    return raw.split('/').map((x) => x.trim()).filter(Boolean);
+    return raw.split(LIST_SEP).map((x) => x.trim()).filter(Boolean);
   }
   if (field.kind === 'lines') {
     return raw.split('\n').map((x) => x.trim()).filter(Boolean);

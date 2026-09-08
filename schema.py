@@ -12,7 +12,8 @@
 
     text    一行字符串
     lines   字符串数组，一行一条（bullet 那种）
-    list    字符串数组，一行里用 / 分隔（面包屑、关键词那种短词组）
+    list    字符串数组，一行里用「空格 / 空格」分隔（面包屑、关键词那种短词组）。
+            只有两侧至少一边带空白的斜杠才算分隔符，所以网址能整条写进去
 """
 
 from __future__ import annotations
@@ -158,7 +159,9 @@ PROJECTS = Block(
     identity="title",
     fields=(
         Field("title", "项目名", "", "个人双语博客"),
-        Field("crumbs", "项目的元信息", "用 / 分隔：技术栈 / 链接 / 你的角色",
+        Field("crumbs", "项目的元信息",
+              "用「空格 / 空格」分隔：技术栈 / 链接 / 你的角色。"
+              "网址里的斜杠不用管，github.com/账号/仓库 会整条留着",
               "example.com / Astro + Git + Cloudflare / 独立搭建并运营", kind="list"),
         Field("description", "这个项目你做了什么", "一到两行，写具体做法，不要写感想",
               "从旧共享二级域迁到自有域：逐路径 301、GSC 地址变更、上线校验与回滚方案。"),

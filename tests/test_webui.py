@@ -131,6 +131,54 @@ class RoundTripTest(unittest.TestCase):
         self.assertEqual(reloaded["document"]["status"], "example")
 
 
+class ListSeparatorTest(unittest.TestCase):
+    """数组字段的分隔符只认带空白的斜杠，网址才能整条写进去。
+
+    盯的是一趟「表单里显示 → 存回去」：光按 "/" 切，crumbs 里的
+    github.com/某账号/某仓库 会被拆成三段，而示例文件里正有这么一条——也就是说
+    仓库自带的内容都过不了这一趟，而纸面上只是多出两个 › ，很容易看漏。
+    webui/app.js 里的 LIST_SEP 必须和这里保持同一条规则。
+    """
+
+    def display(self, items: list[str]) -> str:
+        # app.js 的 toInput()：数组用 " / " 拼给输入框
+        return " / ".join(items)
+
+    def test_a_url_crumb_survives_display_then_reparse(self):
+        original = ["Python", "github.com/example/site-monitor"]
+        self.assertEqual(fill.split_list(self.display(original)), original)
+
+    def test_plain_crumbs_still_split(self):
+        self.assertEqual(fill.split_list("a / b / c"), ["a", "b", "c"])
+
+    def test_a_slash_with_whitespace_on_either_side_splits(self):
+        for text in ("a/ b", "a /b", "a  /  b"):
+            with self.subTest(text=text):
+                self.assertEqual(fill.split_list(text), ["a", "b"])
+
+    def test_a_bare_slash_does_not_split(self):
+        # 网址、日期、mailto: 里的斜杠都长这样
+        self.assertEqual(fill.split_list("github.com/a/b"), ["github.com/a/b"])
+        self.assertEqual(fill.split_list("https://x.com/a/b"), ["https://x.com/a/b"])
+
+    def test_every_list_field_in_the_example_survives(self):
+        content = example_content()
+        for block in schema.BLOCKS:
+            for field in block.fields:
+                if field.kind != "list":
+                    continue
+                node = content.get(block.key)
+                entries = node if isinstance(node, list) else [node] if node else []
+                for index, entry in enumerate(entries):
+                    if not isinstance(entry, dict) or field.key not in entry:
+                        continue
+                    original = entry[field.key]
+                    with self.subTest(where=f"{block.key}[{index}].{field.key}"):
+                        self.assertEqual(
+                            fill.split_list(self.display(original)), original
+                        )
+
+
 class PathGateTest(unittest.TestCase):
     """这个服务唯一的文件边界。挡不住就等于把整个磁盘开给了浏览器。"""
 

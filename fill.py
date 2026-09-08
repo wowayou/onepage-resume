@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 import tomllib
@@ -77,6 +78,17 @@ def confirm(question: str, default: bool = False) -> bool:
 
 # ---------- 问一个字段 ----------
 
+# 数组字段的分隔符：只认两侧至少一边带空白的斜杠。
+# 光按 "/" 切会把网址拆成碎片——crumbs 里正经会出现 github.com/账号/仓库，
+# 示例文件里就有一条。而"用 / 分隔"的写法本来都带空格，所以不受影响。
+LIST_SEP = re.compile(r"\s+/|/\s+")
+
+
+def split_list(text: str) -> list[str]:
+    """把 "a / b" 切成 ["a", "b"]，但 "github.com/x/y" 整条留着。"""
+    return [part.strip() for part in LIST_SEP.split(text) if part.strip()]
+
+
 def show_question(item: Field, current: object) -> None:
     print()
     print(bold(f"  {item.ask}"))
@@ -112,11 +124,11 @@ def ask_list(item: Field, current: list[str]) -> list[str]:
         show_question(item, current)
         answer = prompt().strip()
         if answer:
-            return [part.strip() for part in answer.split("/") if part.strip()]
+            return split_list(answer)
         if current:
             return list(current)
         if item.default:
-            return [p.strip() for p in item.default.split("/") if p.strip()]
+            return split_list(item.default)
         if not item.required:
             return []
         print(red("    这一项是必填的，用 / 分隔着写几个词。"))
