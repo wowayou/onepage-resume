@@ -15,6 +15,8 @@ content*.toml
 
 # ---- 生成物：PDF 里的手机号是能被直接搜出来的 ----
 build/
+# make dist 打出来的可分发包（.gitignore 里的内容文件本就不会进包）
+dist/
 # 万一有人在仓库根目录直接生成，这三条兜底（examples/ 子目录不受影响）
 /*.pdf
 /*.png

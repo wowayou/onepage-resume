@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import threading
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -163,6 +165,74 @@ class DispositionTest(unittest.TestCase):
         self.assertIn("filename*=UTF-8''", header)
         self.assertIn(".pdf", header)
         header.encode("latin-1")           # HTTP 头必须能进 latin-1
+
+
+class OpenBrowserTest(unittest.TestCase):
+    """WSL 里不能信 webbrowser：它挑 xdg-open，失败了也返回 True。
+
+    所以 _open_browser 在 WSL 下要自己调 Windows 那边并看退出码。这里盯的是
+    「开不成时必须返回 False」——谎报成功会让人对着空白桌面等一个不会来的窗口。
+    """
+
+    URL = "http://127.0.0.1:8765"
+
+    def test_wsl_is_detected_from_the_env_var(self):
+        with mock.patch.dict(webui.os.environ, {"WSL_DISTRO_NAME": "Ubuntu-24.04"}):
+            self.assertTrue(webui._in_wsl())
+
+    def test_wsl_prefers_wslview_and_reports_success(self):
+        calls = []
+
+        def which(name):
+            return "/usr/bin/wslview" if name == "wslview" else None
+
+        def run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with mock.patch.object(webui, "_in_wsl", return_value=True), \
+             mock.patch.object(webui.shutil, "which", which), \
+             mock.patch.object(webui.subprocess, "run", run):
+            self.assertTrue(webui._open_browser(self.URL))
+        self.assertEqual(calls, [["wslview", self.URL]])
+
+    def test_wsl_falls_back_to_powershell_when_wslview_fails(self):
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(argv[0])
+            return subprocess.CompletedProcess(argv, 0 if "powershell" in argv[0] else 3)
+
+        with mock.patch.object(webui, "_in_wsl", return_value=True), \
+             mock.patch.object(webui.shutil, "which", lambda name: "/x/" + name), \
+             mock.patch.object(webui.subprocess, "run", run):
+            self.assertTrue(webui._open_browser(self.URL))
+        self.assertEqual(calls, ["wslview", "powershell.exe"])
+
+    def test_wsl_returns_false_when_every_opener_fails(self):
+        def run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 3)
+
+        with mock.patch.object(webui, "_in_wsl", return_value=True), \
+             mock.patch.object(webui.shutil, "which", lambda name: "/x/" + name), \
+             mock.patch.object(webui.subprocess, "run", run):
+            self.assertFalse(webui._open_browser(self.URL))
+
+    def test_wsl_returns_false_when_no_opener_exists(self):
+        with mock.patch.object(webui, "_in_wsl", return_value=True), \
+             mock.patch.object(webui.shutil, "which", lambda name: None):
+            self.assertFalse(webui._open_browser(self.URL))
+
+    def test_non_wsl_goes_through_webbrowser(self):
+        with mock.patch.object(webui, "_in_wsl", return_value=False), \
+             mock.patch.object(webui.webbrowser, "open", return_value=True) as opened:
+            self.assertTrue(webui._open_browser(self.URL))
+        opened.assert_called_once_with(self.URL, new=2)
+
+    def test_a_raising_webbrowser_is_not_reported_as_success(self):
+        with mock.patch.object(webui, "_in_wsl", return_value=False), \
+             mock.patch.object(webui.webbrowser, "open", side_effect=OSError("no display")):
+            self.assertFalse(webui._open_browser(self.URL))
 
 
 class ServerTestCase(unittest.TestCase):

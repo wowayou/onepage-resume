@@ -33,12 +33,16 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import threading
+import time
 import tomllib
 import urllib.parse
+import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -481,26 +485,77 @@ def disposition(name: str) -> str:
 
 # ---------- 启动 ----------
 
-def serve(host: str, port: int, studio: Studio) -> None:
+def _in_wsl() -> bool:
+    """在 WSL 里跑？WSL_DISTRO_NAME 是 WSL2 一定会设的。"""
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def _open_browser(url: str) -> bool:
+    """打开浏览器，返回是否真的开成了。
+
+    WSL 里不能用 webbrowser：它挑中 xdg-open，而 xdg-open 在没装 Linux 浏览器的
+    发行版里会失败——但 webbrowser 不等子进程，照样返回 True。所以 WSL 下自己
+    调 Windows 那边的浏览器，并且看退出码。
+    """
+    if _in_wsl():
+        # wslview（wslu 包）是首选；没装就退到 interop 里一定在的 powershell.exe。
+        if shutil.which("wslview"):
+            if subprocess.run(["wslview", url], check=False,
+                              capture_output=True).returncode == 0:
+                return True
+        if shutil.which("powershell.exe"):
+            return subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", "Start-Process", url],
+                check=False, capture_output=True,
+            ).returncode == 0
+        return False
+    try:
+        return webbrowser.open(url, new=2)
+    except Exception:
+        return False
+
+
+def _open_soon(url: str, delay: float = 0.6) -> None:
+    """服务一起来就开浏览器。放在线程里，开不开都不影响服务本身。"""
+    time.sleep(delay)
+    if _open_browser(url):
+        print(f"已在浏览器里打开：{url}", flush=True)
+    else:
+        # 没开成不是错误，只是得自己点一下——把网址再说一遍，别让人去翻上面。
+        print(f"没能自动打开浏览器，请手工访问：{url}", flush=True)
+
+
+def serve(host: str, port: int, studio: Studio, open_browser: bool = True) -> None:
     handler = type("BoundHandler", (Handler,), {"studio": studio, "bind_host": host})
     server = ThreadingHTTPServer((host, port), handler)
     shown = f"[{host}]" if ":" in host else host
+    url = f"http://{shown}:{port}"
 
     # flush：make ui 之类的场景 stdout 不是终端，缓冲会让这几行迟迟不出来，
     # 而用户正等着这个网址。
-    print(f"填空表单：  http://{shown}:{port}", flush=True)
+    print(f"填空表单：  {url}", flush=True)
     print(f"内容目录：  {studio.content_dir}")
     print(f"生成物：    {studio.out_dir}")
     try:
-        if not ipaddress.ip_address(host).is_loopback:
-            print()
-            print("⚠️  警告：这个服务没有登录、没有口令，门禁就是「只听本机」。")
-            print(f"   现在绑在 {host}，同一网络里的任何人都能读到你的姓名、手机、"
-                  "邮箱，也能写你的内容文件。")
-            print("   除非外面另有一层认证，请改回默认的 127.0.0.1。")
+        is_loopback = ipaddress.ip_address(host).is_loopback
     except ValueError:
-        pass
+        is_loopback = False
+    if not is_loopback:
+        print()
+        print("⚠️  警告：这个服务没有登录、没有口令，门禁就是「只听本机」。")
+        print(f"   现在绑在 {host}，同一网络里的任何人都能读到你的姓名、手机、"
+              "邮箱，也能写你的内容文件。")
+        print("   除非外面另有一层认证，请改回默认的 127.0.0.1。")
     print()
+    # 只在本机回环地址上自动开浏览器；改成 --no-open 关掉（比如远程/无桌面环境）。
+    # 开成没开成由 _open_soon 自己报——它知道结果，这里还不知道。
+    if open_browser and is_loopback:
+        threading.Thread(target=_open_soon, args=(url,), daemon=True).start()
     print("Ctrl-C 停止。", flush=True)
 
     try:
@@ -528,6 +583,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="生成物目录，默认 build/。")
     parser.add_argument("--css", metavar="PATH", default=str(render.DEFAULT_CSS),
                         help="版式 CSS，默认 resume.css。")
+    parser.add_argument("--no-open", action="store_true",
+                        help="不自动打开浏览器（比如远程、无桌面环境）。默认只在绑到 "
+                             "127.0.0.1 时才自动开。")
     return parser.parse_args(argv)
 
 
@@ -548,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     # 字体缺失是最容易被忽略的失败模式，开服前先把话说在前面（和 render.py 一致）。
     render.check_fonts(studio.theme(None))
-    serve(args.host, args.port, studio)
+    serve(args.host, args.port, studio, open_browser=not args.no_open)
     return 0
 
 

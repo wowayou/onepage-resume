@@ -89,23 +89,54 @@ python render.py --content ~/.private/resume/me.toml --out-dir ~/.private/resume
 
 ---
 
-## 快速开始
+## 开箱即用
+
+在没装过任何东西的机器上（Debian / Ubuntu / WSL2，或 macOS + Homebrew），只要仓库
+在手上，**一条命令就绪**：
 
 ```bash
 git clone https://github.com/<你的账号>/onepage-resume.git
 cd onepage-resume
 
-# 系统依赖见下一节，先装好再继续
-make setup                       # 建 venv 装 weasyprint
-make example                     # 渲染虚构示例，确认环境是通的
-
-make fill                        # 填空：一题一题问，写出 content.toml
-make render                      # 出 build/<你起的文件名>.pdf
+make boot
 ```
 
-没有 `make` 就用原始命令：
+`make boot` 依次做三件事，**幂等**（重复跑不会坏事）：
+
+1. `scripts/bootstrap.sh` —— 自动探测包管理器，把 WeasyPrint 要的系统库和 CJK 字体
+   装齐（**缺才装**，不会反复跳出来要 sudo）；非交互、没有 sudo 时会打印手动命令而不是卡死。
+2. `make setup` —— 建 `.venv` 并装 Python 依赖。
+3. `make example` —— 渲染虚构示例冒烟。`build/example/resume.pdf` 出来就说明环境通了。
+
+然后挑一种填法开始（见下），最后 `make render` 出你自己的 PDF。
+
+**原生 Windows 用户**：装好 WSL2 + 一个 Ubuntu 发行版后，**双击仓库根目录的
+`start.cmd`** 即可——它会自动进 WSL 跑完上面三步，等端口通了再打开浏览器。
+（把仓库放在 C:\ 盘也能用，只是 I/O 慢、实时预览会迟钝；长期用建议克隆进 WSL 的
+`/home`。走的是 WSL2 默认开着的 `localhostForwarding`；被关了的话见「排障」。）
+
+### 打一个可分发的包
 
 ```bash
+make dist      # 生成 dist/onepage-resume-<版本>.tar.gz
+```
+
+内容取自 **git HEAD 的跟踪文件**（含 `bootstrap.sh`、`Makefile`、`README`、`start.cmd`），
+所以先把改动 commit 再打。它永远不会带上你的真实内容——`content*.toml` 和 `build/`
+本来就不进 Git，也不会进包。拿到包的人在另一台机器上 `make boot` 即可。
+
+## 快速开始
+
+```bash
+make ui        # 浏览器里填：左边填字，右边实时看 A4（只听本机）
+make render    # 出 build/<你起的文件名>.pdf
+```
+
+不想开浏览器就看下面的"三种填法"。没有 `make` 也不用怕：先跑 `scripts/bootstrap.sh`
+装系统库，再手动建 venv：
+
+```bash
+scripts/bootstrap.sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python fill.py
@@ -114,11 +145,13 @@ python3 -m venv .venv
 
 ### 三种填法，挑一种
 
-**〇、浏览器里填**（想边填边看版面就用这个）
+**〇、浏览器里填**（想边填边看版面就用这个，零终端的正门）
 
 ```bash
-make ui                          # 或 python webui.py
-# 打开 http://127.0.0.1:8765
+make ui                          # 绑到 127.0.0.1 时会自动打开浏览器
+# 在 WSL 里会去开 Windows 那边的浏览器；开不成会把网址再打一遍让你自己点
+# 不想自动开（远程 / 无桌面）： python webui.py --no-open
+# 手工访问也行： http://127.0.0.1:8765
 ```
 
 左边是照着字段表长出来的表单，右边是那张 A4——打字停下约 0.4 秒，右边就用
@@ -181,6 +214,9 @@ python fill.py --check           # 只检查，不渲染
 
 ## 环境准备
 
+**正常不用手工做这一节**——`make boot` 会自动装齐。这里写给想手动装、或排查
+"我的环境为什么渲染不出来"的人。
+
 WeasyPrint 不是纯 Python，它要 `dlopen` 系统的 pango / cairo / harfbuzz /
 fontconfig。中文字体推荐 Noto Sans CJK SC + Noto Serif CJK SC——**字体会被嵌进
 PDF**，所以对方电脑上没装也能看到一样的排版。
@@ -234,7 +270,16 @@ pwd             # 应该显示 /home/<你>
 > ⚠️ **不要把仓库放在 `/mnt/c/` 下面。** 跨文件系统的 I/O 慢一个数量级，
 > WeasyPrint 读字体和写 PDF 都会明显卡；文件权限也会一团糟。
 
-### 2. 装系统依赖
+### 2. 装环境（一条命令）
+
+```bash
+git clone https://github.com/<你的账号>/onepage-resume.git ~/onepage-resume
+cd ~/onepage-resume
+make boot          # 系统库 + 字体 + venv + 依赖 + 渲染示例，一步到位
+```
+
+`make boot` 里的 `scripts/bootstrap.sh` 就是下面这些命令的自动版（缺才装，已装跳过）。
+想手动装 / 排查时才需要看它们：
 
 ```bash
 sudo apt update
@@ -246,17 +291,8 @@ fc-cache -fv                        # 刷新字体缓存
 fc-list | grep -i "Noto Sans CJK"   # 有输出才算装上了
 ```
 
-### 3. 克隆工具仓库并装依赖
-
-```bash
-git clone https://github.com/<你的账号>/onepage-resume.git ~/onepage-resume
-cd ~/onepage-resume
-make setup
-make example        # 出 build/example/resume.pdf 就说明环境通了
-```
-
-**先跑 `make example`。** 环境问题（缺 DLL、缺字体）会在这一步暴露，
-这时候还没有牵涉你的真实数据，排查干净。
+**boot 最后那步 `make example` 是关键。** 环境问题（缺 DLL、缺字体）会在渲染示例时
+暴露，这时候还没有牵涉你的真实数据，排查干净。
 
 ### 4. 把你的真实内容文件弄过来
 
@@ -337,6 +373,10 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
   那么松的行距）。写英文简历时 `--theme theme.en.toml`。
 - `resume.css` —— 版式规则。文件开头写了五条设计约束，改版式前先读。
 - `render.py` —— 渲染程序。正常维护内容时不要编辑。
+- `scripts/bootstrap.sh` —— 开箱即用的一半：自动探测 apt / brew，把系统库和 CJK 字体
+  装齐（缺才装）。被 `make boot` 调用，也能单独跑。
+- `start.cmd` —— 原生 Windows 的双击入口：检测到 WSL2 后，自动进默认发行版跑
+  `make boot`，起网页版，等端口通了再由 Windows 这边开浏览器。跟踪。
 - `webui/` —— 网页表单的静态文件（`index.html` / `app.css` / `app.js`）。
   表单本身不写在这里：它由 `app.js` 照着 `schema.py` 的字段表长出来。
 - `tests/` —— 标准库 `unittest` 写的测试，`make test` 跑。跟踪。
@@ -486,7 +526,8 @@ python fill.py --check --out content.acme.toml   # 这个可以：检查合并�
 | 网页版存不了 | 文件名不是 `content*.toml`、是那份示例、或是定制版 | 换成 `content.toml` / `content.<公司>.toml`；定制版请手工编辑 |
 | `[keep] … 里写了 X，但被继承的那份里没有这一条` | 基底改了名字，定制版没跟上 | 按报错里列出的可选值改；这正是它该拦住的事 |
 | `是定制版（extends = …）` | 想用 `fill.py` 或网页版改定制版 | 直接编辑那十几行；查空白用 `fill.py --check` |
-| WSL2 里开了服务，Windows 打不开 | 极少数 WSL2 没转发 localhost | 在 Windows 浏览器里试 `http://127.0.0.1:8765`；不行就查 WSL 的 localhostForwarding |
+| WSL2 里开了服务，Windows 打不开 | `localhostForwarding` 被关了（默认是开的） | 在 `%UserProfile%\.wslconfig` 里写 `[wsl2]` + `localhostForwarding=true`，再 `wsl --shutdown` 重开 |
+| WSL 里 `make ui` 没弹出浏览器 | 发行版里没有 Linux 浏览器，也没装 `wslu` | 它会退到 `powershell.exe` 去开 Windows 默认浏览器；两条都不成时按提示手工打开那个网址 |
 
 ## License
 
