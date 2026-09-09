@@ -19,7 +19,7 @@ help:
 	@echo "make setup      建 venv 并装 Python 依赖（系统库交给 make boot 那一步）"
 	@echo "make ui         浏览器里填：左边填字，右边实时看 A4（只听本机）"
 	@echo "make fill       填空：一题一题地填出 content.toml"
-	@echo "make blank      生成一份空白表单，自己在编辑器里填"
+	@echo "make blank      生成一份空白表单，自己在编辑器里填（加 SAMPLE=1 填示例内容先看版面）"
 	@echo "make render     渲染你自己的简历到 build/"
 	@echo "make example    渲染虚构示例，用来确认环境是通的"
 	@echo "make preview    重渲示例并更新 README 里的预览图（改完示例必跑）"
@@ -41,7 +41,7 @@ ui:
 	$(PY) webui.py
 
 blank:
-	$(PY) fill.py --blank
+	$(PY) fill.py --blank $(if $(SAMPLE),--sample)
 
 render:
 	$(PY) render.py

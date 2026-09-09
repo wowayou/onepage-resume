@@ -3,10 +3,10 @@
 [![render](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml/badge.svg)](https://github.com/wowayou/onepage-resume/actions/workflows/render.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**填空式**的一页简历生成器：`python fill.py` 一题一题地问，问完写成一份内容 TOML，
+**填空式**的一页简历生成器：`make fill` 一题一题地问，问完写成一份内容 TOML，
 再 `make render` 出 PDF / HTML / PNG。
-不想被问就 `python fill.py --blank` 拿一份空白表单，在编辑器里把每个空填上。
-想边填边看版面就 `python webui.py`，浏览器里左边填字、右边实时看 A4（只听本机）。
+不想被问就 `make blank` 拿一份空白表单，在编辑器里把每个空填上。
+想边填边看版面就 `make ui`，浏览器里左边填字、右边实时看 A4（只听本机）。
 
 答案存成 TOML，版面用 CSS 排——内容和版式始终是分开的两个文件。
 
@@ -172,7 +172,7 @@ python3 -m venv .venv
 ```bash
 make ui                          # 绑到 127.0.0.1 时会自动打开浏览器
 # 在 WSL 里会去开 Windows 那边的浏览器；开不成会把网址再打一遍让你自己点
-# 不想自动开（远程 / 无桌面）： python webui.py --no-open
+# 不想自动开（远程 / 无桌面）：.venv/bin/python webui.py --no-open
 # 手工访问也行： http://127.0.0.1:8765
 ```
 
@@ -211,14 +211,14 @@ HTML 只给下载——内联打开会让生成的页面脚本跑在本服务的
 > `.gitignore` 挡住的那一批），以及生成物目录里的 .pdf / .html / .png。
 > `content.example.toml` 是仓库里跟踪的示例，可以读进来看版面，**不许写回去**。
 >
-> 真实内容想放仓库外：`python webui.py --content-dir ~/.private/resume`。
+> 真实内容想放仓库外：`.venv/bin/python webui.py --content-dir ~/.private/resume`。
 > 这个边界也适用于 `extends` 的每一层；不接受目录穿越、绝对路径或符号链接。
 > 写接口仅接受 JSON，并检查浏览器来源，拒绝其他网站借本机服务写入文件。
 
 **一、被问着填**（不想开浏览器就用这个）
 
 ```bash
-python fill.py
+make fill
 ```
 
 一题一题往下走，每题都带一句解释和一个例子。回车 = 跳过选填项；数组类的
@@ -231,8 +231,8 @@ python fill.py
 **二、自己在编辑器里填**
 
 ```bash
-python fill.py --blank           # 生成 content.toml：每个空都在，但都空着
-python fill.py --blank --sample  # 想先看版面，就用带示例答案的那一份
+make blank                       # 生成 content.toml：每个空都在，但都空着
+# 或：make blank SAMPLE=1       # 想先看版面，就用带示例答案的那一份
 $EDITOR content.toml
 ```
 
@@ -252,7 +252,7 @@ $EDITOR content.toml
 不会渲染出一份带着空标题的 PDF，那种"看上去成功了"的 PDF 最容易被直接发出去。
 
 ```bash
-python fill.py --check           # 只检查，不渲染
+.venv/bin/python fill.py --check           # 只检查，不渲染
 ```
 
 ---
