@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import re
 import shutil
 import subprocess
 import sys
@@ -163,6 +164,19 @@ def build_root_css(theme: dict) -> str:
     )
 
 
+# 面包屑里裸写的网址：github.com/账号/仓库、example.org/a/b/。要求首段带点、
+# 点后是 2 个以上纯字母（挡掉 "2026.05"），整条不含空白（挡掉 "Astro + Git"）。
+BARE_URL = re.compile(r"^[\w.-]+\.[A-Za-z]{2,}(?:/\S*)?$")
+
+
+def bare_url_href(value: str) -> str:
+    """面包屑里的裸网址补上 https:// 再交给 safe_href；不像网址的原样返回空串。"""
+    text = value.strip()
+    if not text or not BARE_URL.match(text):
+        return ""
+    return safe_href(f"https://{text}")
+
+
 def safe_href(value: str) -> str:
     value = value.strip()
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -205,8 +219,18 @@ class ResumeBuilder:
 
     @staticmethod
     def crumbs(items: list[str]) -> str:
-        """面包屑：用 › 表示层级，分隔符由 CSS 生成，不写进内容。"""
-        return "".join(f'<span class="crumb">{esc(item)}</span>' for item in items)
+        """面包屑：用 › 表示层级，分隔符由 CSS 生成，不写进内容。
+
+        裸写的网址渲染成可点链接——作品链接点不开，PDF 投出去就等于没写。
+        """
+        parts = []
+        for item in items:
+            text = esc(item)
+            href = bare_url_href(item)
+            if href:
+                text = f'<a href="{esc(href)}">{text}</a>'
+            parts.append(f'<span class="crumb">{text}</span>')
+        return "".join(parts)
 
     def row(self, title: str, body: str) -> str:
         return (
