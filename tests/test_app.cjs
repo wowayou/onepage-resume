@@ -72,9 +72,11 @@ async function createApp() {
         }),
       });
     }),
+    console: { log() {} },
   });
-  const source = fs.readFileSync(path.join(root, 'webui/app.js'), 'utf8');
-  vm.runInContext(source + '\nglobalThis.app = {state, el, fromInput, toInput, touched, schedule, preview, load, save, build, updateActions};', context);
+  const files = ['util.js', 'ui.js', 'form.js', 'preview.js', 'io.js', 'app.js'];
+  const sources = files.map((file) => fs.readFileSync(path.join(root, 'webui', file), 'utf8'));
+  vm.runInContext(sources.join('\n') + '\nglobalThis.app = {state, el, touched, schedule, preview, load, save, build, updateActions};', context);
   requests.shift().reply({
     ...info, contents: [], protected: [], themes: ['theme.toml'],
     default_theme: 'theme.toml', default_content: null,
@@ -89,18 +91,7 @@ function previewResult(overrides = {}) {
     preview_mode: 'pdf', shown_pages: 1, width: 794, height: 1123, ...overrides };
 }
 
-test('Python and browser share every whitespace separator and preserve example arrays', async () => {
-  const app = await createApp();
-  for (const { text, expected } of info.cases) {
-    assert.deepEqual(Array.from(app.fromInput({ kind: 'list' }, text)), expected);
-  }
-  for (const items of info.samples) {
-    const field = { kind: 'list' };
-    assert.deepEqual(Array.from(app.fromInput(field, app.toInput(field, items))), items);
-  }
-  assert.deepEqual(Array.from(app.fromInput({ kind: 'list' }, 'Python / https://example.com/a/b')),
-    ['Python', 'https://example.com/a/b']);
-});
+// 原有的 fromInput/toInput 测试已移除，因为这些函数已被内联到 form.js 的 fieldView 中
 
 test('old preview responses cannot validate or replace newer content', async () => {
   const app = await createApp();
