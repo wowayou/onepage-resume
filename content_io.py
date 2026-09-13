@@ -16,6 +16,14 @@ class ConflictError(ValueError):
     """目标文件已改变，必须重新读取后再保存。"""
 
 
+class ExistsError(ConflictError):
+    """目标已存在（另存为撞名）。"""
+
+
+class ModifiedError(ConflictError):
+    """文件在读取之后被改过（版本不符）。"""
+
+
 # 内容文件与版式文件的文件名规则。CLI 的继承闸门与网页的文件闸门共用这一份，
 # 只改一处就能同时放开或收紧两边。
 CONTENT_GLOB = "content*.toml"
@@ -176,8 +184,18 @@ def save_content(path: Path, text: str, expected_revision: str | None) -> tuple[
         raise ValueError(f"拒绝写入符号链接：{path.name}")
     previous = path.read_bytes() if path.exists() else None
     current_revision = revision(previous) if previous is not None else None
+    
+    # 分开两种冲突：新文件撞名 vs 版本不符
     if current_revision != expected_revision:
-        raise ConflictError(f"{path.name} 已存在或已被其他窗口修改，请重新读取后再保存。")
+        if expected_revision is None:
+            # 以为是新建，但文件已存在
+            raise ExistsError(f"{path.name} 已存在，换个名字或选择覆盖。")
+        else:
+            # 期望某个版本，但文件已被改动
+            raise ModifiedError(
+                f"{path.name} 在你读取之后被改过（可能是另一个窗口或编辑器），"
+                f"请重新读取后再保存。"
+            )
     backup = None
     if previous is not None:
         existing = tomllib.loads(previous.decode("utf-8"))

@@ -88,6 +88,15 @@ PREVIEW_LOCK = threading.Lock()   # WeasyPrint 不保证线程安全，渲染串
 PREVIEW_PAGE_LIMIT = 2
 
 
+class ApiError(Exception):
+    """携带 HTTP 状态码、machine code 和附加字段的 API 错误。"""
+    def __init__(self, status: HTTPStatus, code: str, message: str, **extra):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.extra = extra
+
+
 # ---------- 表单 JSON ←→ 内容文件 ----------
 
 def _value(field: schema.Field, raw: object) -> object:
@@ -327,8 +336,12 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_bytes(body, "application/json; charset=utf-8", status)
 
-    def fail(self, status: HTTPStatus, message: str) -> None:
-        self.send_json({"error": message}, status)
+    def fail(self, status: HTTPStatus, message: str, code: str = "", **extra) -> None:
+        payload = {"error": message}
+        if code:
+            payload["code"] = code
+        payload.update(extra)
+        self.send_json(payload, status)
 
     def body_json(self) -> dict:
         if self.headers.get_content_type() != "application/json":
@@ -392,8 +405,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.do_render()
             else:
                 self.fail(HTTPStatus.NOT_FOUND, "没有这个地址。")
+        except ApiError as error:
+            self.fail(error.status, str(error), error.code, **error.extra)
+        except content_io.ExistsError as error:
+            self.fail(HTTPStatus.CONFLICT, str(error), "exists")
+        except content_io.ModifiedError as error:
+            self.fail(HTTPStatus.CONFLICT, str(error), "modified")
         except content_io.ConflictError as error:
-            self.fail(HTTPStatus.CONFLICT, str(error))
+            self.fail(HTTPStatus.CONFLICT, str(error), "conflict")
         except (ValueError, RecursionError) as error:
             self.fail(HTTPStatus.BAD_REQUEST, str(error))
         except FileNotFoundError as error:

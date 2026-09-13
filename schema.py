@@ -325,51 +325,111 @@ def validate_types(content: object) -> None:
         raise ValueError("内容格式有误：\n" + "\n".join(errors))
 
 
-def find_blanks(content: dict) -> list[str]:
-    """返回还没填的空，每条是一句能直接照着去改的话。"""
+def find_blank_locations(content: dict) -> list[dict]:
+    """返回结构化的空白位置列表，每项包含 block/index/field/item/section/message。"""
     errors = find_type_errors(content)
     if errors:
-        return errors
-    blanks: list[str] = []
+        # 类型错误也用同样的结构返回，但不含位置信息
+        return [{"block": "", "index": None, "field": "", "item": None,
+                 "section": False, "message": err} for err in errors]
+    
+    locations: list[dict] = []
 
-    def check_fields(table: dict, block: Block, location: str) -> None:
+    def check_fields(table: dict, block: Block, block_index: int | None) -> None:
         for item in block.fields:
             value = table.get(item.key)
             if _empty(value):
                 if item.required:
-                    blanks.append(f"{location} {item.key} —— {item.ask}")
+                    if block_index is not None:
+                        msg = f"[[{block.key}]] 第 {block_index + 1} 条的 {item.key} —— {item.ask}"
+                    else:
+                        msg = f"[{block.key}] {item.key} —— {item.ask}"
+                    locations.append({
+                        "block": block.key,
+                        "index": block_index,
+                        "field": item.key,
+                        "item": None,
+                        "section": False,
+                        "message": msg,
+                    })
                 continue
             if isinstance(value, list):
-                for index, entry in enumerate(value, 1):
+                for item_index, entry in enumerate(value):
                     if _empty(entry):
-                        blanks.append(f"{location} {item.key}[{index}] —— 有空白条目")
+                        if block_index is not None:
+                            msg = f"[[{block.key}]] 第 {block_index + 1} 条的 {item.key}[{item_index + 1}] —— 有空白条目"
+                        else:
+                            msg = f"[{block.key}] {item.key}[{item_index + 1}] —— 有空白条目"
+                        locations.append({
+                            "block": block.key,
+                            "index": block_index,
+                            "field": item.key,
+                            "item": item_index,
+                            "section": False,
+                            "message": msg,
+                        })
 
     for block in BLOCKS:
         if block.section_key and _empty(
             (content.get(block.section_key) or {}).get("title")
         ):
-            blanks.append(f'[{block.section_key}] title —— {block.title}这一栏的栏目名')
+            msg = f'[{block.section_key}] title —— {block.title}这一栏的栏目名'
+            locations.append({
+                "block": block.section_key,
+                "index": None,
+                "field": "title",
+                "item": None,
+                "section": True,
+                "message": msg,
+            })
 
         if not block.repeat:
             table = content.get(block.key)
             if not isinstance(table, dict):
-                blanks.append(f"[{block.key}] 整块缺失 —— {block.title}")
+                msg = f"[{block.key}] 整块缺失 —— {block.title}"
+                locations.append({
+                    "block": block.key,
+                    "index": None,
+                    "field": "",
+                    "item": None,
+                    "section": False,
+                    "message": msg,
+                })
                 continue
-            check_fields(table, block, f"[{block.key}]")
+            check_fields(table, block, None)
             continue
 
         rows = content.get(block.key)
         if not isinstance(rows, list) or len(rows) < block.min_items:
-            blanks.append(
-                f"[[{block.key}]] 至少要有 {block.min_items} 条 —— {block.title}"
-            )
+            msg = f"[[{block.key}]] 至少要有 {block.min_items} 条 —— {block.title}"
+            locations.append({
+                "block": block.key,
+                "index": None,
+                "field": "",
+                "item": None,
+                "section": False,
+                "message": msg,
+            })
             continue
         if block.max_items and len(rows) > block.max_items:
-            blanks.append(f"[[{block.key}]] 最多 {block.max_items} 条 —— {block.title}")
-        for index, row in enumerate(rows, start=1):
-            check_fields(row, block, f"[[{block.key}]] 第 {index} 条的")
+            msg = f"[[{block.key}]] 最多 {block.max_items} 条 —— {block.title}"
+            locations.append({
+                "block": block.key,
+                "index": None,
+                "field": "",
+                "item": None,
+                "section": False,
+                "message": msg,
+            })
+        for index, row in enumerate(rows):
+            check_fields(row, block, index)
 
-    return blanks
+    return locations
+
+
+def find_blanks(content: dict) -> list[str]:
+    """返回还没填的空，每条是一句能直接照着去改的话。"""
+    return [loc["message"] for loc in find_blank_locations(content)]
 
 
 # ---------- 空白表单 ----------
