@@ -21,7 +21,7 @@ function fieldView(block, field, read, write) {
     input.value = value || '';
     input.placeholder = field.example || field.hint || '';
     if (field.max_length) input.maxLength = field.max_length;
-  } else if (field.kind === 'longtext') {
+  } else if (field.kind === 'lines') {
     input = node('textarea');
     input.value = value || '';
     input.placeholder = field.example || field.hint || '';
@@ -41,6 +41,11 @@ function fieldView(block, field, read, write) {
     input.value = lines.join('\n');
     input.placeholder = field.example || field.hint || '';
     input.rows = Math.max(3, lines.length + 1);
+  } else {
+    // 未知 kind，降级为单行输入
+    input = node('input');
+    input.type = 'text';
+    input.value = value || '';
   }
 
   input.id = `${block.key}-${field.key}`;
@@ -50,7 +55,7 @@ function fieldView(block, field, read, write) {
   input.addEventListener('input', () => {
     let val = input.value;
     if (field.kind === 'list') {
-      val = val.split(state.listSeparator).map((line) => line.replace(state.trimPattern, ''));
+      val = val.split('\n').map((line) => line.trim()).filter((line) => line);
     }
     write(val);
     touched();
