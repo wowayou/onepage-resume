@@ -69,6 +69,47 @@ class SerializationTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     webui.shape(payload)
 
+    def test_blank_locations_cover_every_message(self):
+        """每条 find_blanks() 的消息都能在 find_blank_locations() 里找到对应的位置。"""
+        content = tomllib.loads(schema.blank_form(sample=False))
+        messages = schema.find_blanks(content)
+        locations = schema.find_blank_locations(content)
+        self.assertEqual(len(messages), len(locations))
+        for msg, loc in zip(messages, locations):
+            self.assertEqual(msg, loc["message"])
+            self.assertIn("block", loc)
+            self.assertIn("index", loc)
+            self.assertIn("field", loc)
+            self.assertIn("item", loc)
+            self.assertIn("section", loc)
+
+    def test_blank_locations_point_at_real_fields(self):
+        """location 里的 block/field 一定对应 schema 里存在的东西。"""
+        content = tomllib.loads(schema.blank_form(sample=False))
+        locations = schema.find_blank_locations(content)
+        block_keys = {b.key for b in schema.BLOCKS}
+        section_keys = {b.section_key for b in schema.BLOCKS if b.section_key}
+        all_keys = block_keys | section_keys
+        
+        for loc in locations:
+            block_name = loc["block"]
+            field_name = loc["field"]
+            # 类型错误可能没有 block
+            if not block_name:
+                continue
+            self.assertIn(block_name, all_keys, f"位置 {loc} 的 block 不在 schema 里")
+            # section 类型的 location 检查 section_key
+            if loc["section"]:
+                self.assertIn(block_name, section_keys)
+                continue
+            # 常规 block
+            if block_name not in block_keys:
+                continue
+            block = next(b for b in schema.BLOCKS if b.key == block_name)
+            if field_name:  # 可能是整块缺失，此时 field 为空
+                field_keys = {f.key for f in block.fields}
+                self.assertIn(field_name, field_keys, f"位置 {loc} 的 field 不在 {block_name} 里")
+
 
 class FileTestCase(unittest.TestCase):
     def setUp(self):
@@ -136,6 +177,31 @@ class AtomicSaveTest(FileTestCase):
         result = subprocess.run([sys.executable, "-S", str(ROOT / "fill.py"), "--check", "--out", str(self.path)],
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_exists_and_modified_are_distinct_errors(self):
+        """新文件撞名 → ExistsError；版本不符 → ModifiedError；两者仍是 ConflictError。"""
+        # 新文件撞名
+        self.path.write_text(self.text, encoding="utf-8")
+        with self.assertRaises(content_io.ExistsError) as ctx:
+            content_io.save_content(self.path, self.text, None)
+        self.assertIn("已存在", str(ctx.exception))
+        
+        # 版本不符
+        revision = content_io.revision(self.path.read_bytes())
+        self.path.write_text("[document]\noutput_basename=\"changed\"\n", encoding="utf-8")
+        with self.assertRaises(content_io.ModifiedError) as ctx:
+            content_io.save_content(self.path, self.text, revision)
+        self.assertIn("被改过", str(ctx.exception))
+        
+        # 两者都是 ConflictError
+        self.assertTrue(issubclass(content_io.ExistsError, content_io.ConflictError))
+        self.assertTrue(issubclass(content_io.ModifiedError, content_io.ConflictError))
+        
+        # 旧代码仍然接得住
+        try:
+            content_io.save_content(self.path, self.text, None)
+        except content_io.ConflictError:
+            pass  # ExistsError 应该被 ConflictError 接住
 
 
 class InheritanceSafetyTest(FileTestCase):
