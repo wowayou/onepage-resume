@@ -22,54 +22,55 @@ let dialogBackdrop = null;
  * @returns {HTMLElement} 对话框元素
  */
 function dialog({ title, message, buttons }) {
-  if (!dialogBackdrop) {
-    dialogBackdrop = document.createElement('div');
-    dialogBackdrop.className = 'dialog-backdrop';
-    document.body.appendChild(dialogBackdrop);
-  }
+  return new Promise((resolve) => {
+    if (!dialogBackdrop) {
+      dialogBackdrop = document.createElement('div');
+      dialogBackdrop.className = 'dialog-backdrop';
+      document.body.appendChild(dialogBackdrop);
+    }
 
-  const box = document.createElement('div');
-  box.className = 'dialog';
-  box.setAttribute('role', 'dialog');
-  box.setAttribute('aria-modal', 'true');
+    const box = document.createElement('div');
+    box.className = 'dialog';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
 
-  const header = document.createElement('div');
-  header.className = 'dialog-header';
-  const h2 = document.createElement('h2');
-  h2.textContent = title;
-  header.appendChild(h2);
+    const header = document.createElement('div');
+    header.className = 'dialog-header';
+    const h2 = document.createElement('h2');
+    h2.textContent = title;
+    header.appendChild(h2);
 
-  const body = document.createElement('div');
-  body.className = 'dialog-body';
-  body.textContent = message;
+    const body = document.createElement('div');
+    body.className = 'dialog-body';
+    body.textContent = message;
 
-  const footer = document.createElement('div');
-  footer.className = 'dialog-footer';
+    const footer = document.createElement('div');
+    footer.className = 'dialog-footer';
 
-  buttons.forEach((btn) => {
-    const button = document.createElement('button');
-    button.textContent = btn.label;
-    button.className = btn.kind || 'ghost';
-    button.addEventListener('click', () => {
-      closeDialog(box);
-      if (btn.action) btn.action();
+    buttons.forEach((btn) => {
+      const button = document.createElement('button');
+      button.textContent = btn.label;
+      button.className = btn.kind || 'ghost';
+      button.addEventListener('click', () => {
+        closeDialog(box);
+        if (btn.action) btn.action();
+        resolve(btn.label);
+      });
+      footer.appendChild(button);
     });
-    footer.appendChild(button);
+
+    box.appendChild(header);
+    box.appendChild(body);
+    box.appendChild(footer);
+
+    dialogBackdrop.appendChild(box);
+    dialogBackdrop.classList.add('show');
+    dialogStack.push(box);
+
+    // 焦点放在第一个按钮上
+    const firstButton = footer.querySelector('button');
+    if (firstButton) firstButton.focus();
   });
-
-  box.appendChild(header);
-  box.appendChild(body);
-  box.appendChild(footer);
-
-  dialogBackdrop.appendChild(box);
-  dialogBackdrop.classList.add('show');
-  dialogStack.push(box);
-
-  // 焦点放在第一个按钮上
-  const firstButton = footer.querySelector('button');
-  if (firstButton) firstButton.focus();
-
-  return box;
 }
 
 function closeDialog(box) {
