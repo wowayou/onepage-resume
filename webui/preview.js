@@ -1,8 +1,14 @@
-/* 预览：触发、调度、渲染、缩放。 */
+/* 预览：防抖、请求、页数与空白显示、纸张缩放。
+ *
+ * 预览走 render.py 真渲（/api/preview 返回 WeasyPrint 排出来的页面图），不是前端
+ * 另写一套近似排版——所以屏幕上的换行和页数与 PDF 一致，这一条是刻意的。
+ *
+ * 每个窗口最多一个在途请求：预览版本号对不上就丢弃旧响应，绝不拿旧结果去校验新内容。
+ */
 
 'use strict';
 
-const PREVIEW_DELAY = 620;  // 输入停下 600ms 后发预览
+const PREVIEW_DELAY = 400;      // 打字停下 400ms 才渲染，别每敲一个字都渲
 
 function touched() {
   state.contentVersion += 1;

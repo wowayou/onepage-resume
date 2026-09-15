@@ -1,63 +1,123 @@
-/* 表单渲染：字段、卡片、区块。 */
+/* 照着 schema.py 的字段表长出表单。
+ *
+ * 表单本身不在这里定义：/api/bootstrap 把字段表发过来，buildForm() 照着长。
+ * 加一个字段只改 schema.py，这个文件不用动。
+ *
+ * 值的编辑形态有讲究（见下面「值的编辑形态」一段）：list 字段在输入框里用
+ * 「空格 / 空格」分隔、lines 字段一行一条，两者在 TOML 里都是数组。分隔规则由
+ * schema.py 发布（/api/bootstrap 的 input_rules），这里不另写一份——写歪了会
+ * 出现"网页上看着对、存出来多两个 ›"这种纸面上才看得见的错。
+ */
 
 'use strict';
 
-/** 给某一个字段渲染 <label> + input/textarea。 */
-function fieldView(block, field, read, write) {
-  const label = node('label');
-  label.htmlFor = `${block.key}-${field.key}`;
-  label.textContent = field.ask;
+/* ---------- 值的编辑形态 ----------
+ * kind=list  一行里用「空格 / 空格」分隔（面包屑、关键词那种短词组）。
+ *            只有两侧至少一边带空白的斜杠才算分隔符，所以网址能整条写进去。
+ * kind=lines 一行一条（bullet 那种）
+ * 这两种在 TOML 里都是数组，只是在输入框里的写法不同。
+ */
 
+function toInput(field, value) {
+  if (field.kind === 'list') return (value || []).join(' / ');
+  if (field.kind === 'lines') return (value || []).join('\n');
+  return value == null ? '' : String(value);
+}
+
+function fromInput(field, raw) {
+  if (field.kind === 'list') {
+    return raw.split(state.listSeparator).map(trimInput).filter(Boolean);
+  }
+  if (field.kind === 'lines') {
+    return raw.split('\n').map(trimInput).filter(Boolean);
+  }
+  return raw;
+}
+
+function trimInput(value) {
+  return value.replace(state.trimPattern, '');
+}
+
+// 这几个空天生要写成几行字，给它们 textarea 而不是单行输入框。
+const AREAS = new Set([
+  'summary.text', 'skills.text', 'experiences.bullets', 'projects.description',
+]);
+
+function isArea(block, field) {
+  return field.kind === 'lines' || AREAS.has(`${block.key}.${field.key}`);
+}
+
+function emptyValue(field) {
+  if (field.kind === 'list' || field.kind === 'lines') {
+    return field.default ? fromInput(field, field.default) : [];
+  }
+  return field.default || '';
+}
+
+function emptyRow(block) {
+  const row = {};
+  block.fields.forEach((field) => { row[field.key] = emptyValue(field); });
+  return row;
+}
+
+function emptyContent() {
+  const content = {};
+  state.blocks.forEach((block) => {
+    if (block.section_key) content[block.section_key] = { title: block.section_default };
+    content[block.key] = block.repeat ? [emptyRow(block)] : emptyRow(block);
+  });
+  return content;
+}
+
+/* ---------- 长出表单 ---------- */
+
+function hintText(field) {
+  const bits = [];
+  if (field.hint) bits.push(field.hint);
+  if (field.kind === 'list') bits.push('用 / 分隔');
+  if (field.kind === 'lines') bits.push('一行一条');
+  if (field.example) bits.push(`例：${field.example}`);
+  if (!field.required) bits.push('可留空');
+  return bits.join(' · ');
+}
+
+/** 一个空。read/write 把它接到 state.content 上的具体位置。 */
+function fieldView(block, field, read, write) {
   const wrap = node('div', 'field');
+  const id = `f-${Math.random().toString(36).slice(2, 9)}`;
+
+  const label = node('label', null, field.ask);
+  label.htmlFor = id;
+  if (field.required) label.append(node('span', 'req', '*'));
   wrap.append(label);
 
-  const value = read();
-  let input;
-  let counter = null;
+  const hint = hintText(field);
+  if (hint) wrap.append(node('span', 'hint', hint));
 
-  if (field.kind === 'text') {
-    input = node('input');
-    input.type = 'text';
-    input.value = value || '';
-    input.placeholder = field.example || field.hint || '';
-    if (field.max_length) input.maxLength = field.max_length;
-  } else if (field.kind === 'lines') {
-    input = node('textarea');
-    input.value = value || '';
-    input.placeholder = field.example || field.hint || '';
-    input.rows = 3;
-    if (field.max_length) {
-      input.maxLength = field.max_length;
-      counter = node('span', 'counter', `0 / ${field.max_length}`);
-      const tick = () => {
-        counter.textContent = `${input.value.length} / ${field.max_length}`;
-      };
-      input.addEventListener('input', tick);
-      tick();
-    }
-  } else if (field.kind === 'list') {
-    input = node('textarea');
-    const lines = Array.isArray(value) ? value : [];
-    input.value = lines.join('\n');
-    input.placeholder = field.example || field.hint || '';
-    input.rows = Math.max(3, lines.length + 1);
+  const input = isArea(block, field)
+    ? node('textarea')
+    : node('input');
+  input.id = id;
+  input.value = toInput(field, read());
+  if (input.tagName === 'TEXTAREA') {
+    input.rows = field.kind === 'lines' ? 4 : 2;
   } else {
-    // 未知 kind，降级为单行输入
-    input = node('input');
     input.type = 'text';
-    input.value = value || '';
+    input.spellcheck = false;
   }
+  if (field.required && !input.value.trim()) input.classList.add('blank');
 
-  input.id = `${block.key}-${field.key}`;
-  input.required = Boolean(field.required);
-  if (field.hint && field.kind !== 'longtext') input.title = field.hint;
+  // 概况那一段长度最要命（超过四行会把后面的内容挤掉），给它一个字数计。
+  const counter = block.key === 'summary' ? node('span', 'count') : null;
+  const countUp = () => {
+    if (counter) counter.textContent = `${input.value.trim().length} 字`;
+  };
+  countUp();
 
   input.addEventListener('input', () => {
-    let val = input.value;
-    if (field.kind === 'list') {
-      val = val.split('\n').map((line) => line.trim()).filter((line) => line);
-    }
-    write(val);
+    write(fromInput(field, input.value));
+    input.classList.toggle('blank', field.required && !input.value.trim());
+    countUp();
     touched();
   });
 

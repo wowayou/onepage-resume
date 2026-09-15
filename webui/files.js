@@ -1,4 +1,9 @@
-/* 读、存、生成：与后端的 I/O 交互。 */
+/* 读、存：打开一份内容文件，把表单写回去。
+ *
+ * 网页和 `python fill.py` 认的是同一份 content.toml，所以这里不自己拼 TOML：
+ * 表单 JSON 交给服务端，由它走 content_io.py 的原子保存与版本检查。
+ * 读取时带着 revision，保存时原样送回——文件被别的窗口改过就会被拒绝，不会静默覆盖。
+ */
 
 'use strict';
 
@@ -15,7 +20,17 @@ function readOnlyNote(result) {
 
 async function load(name) {
   if (state.loading || state.saving) return;
-  if (state.dirty && !confirm('当前改动还没保存，读取会丢掉它们。继续？')) return;
+  if (state.dirty) {
+    const answer = await dialog({
+      title: '当前改动还没保存',
+      message: `读取 ${name} 会丢掉这些改动。`,
+      buttons: [
+        { label: '取消', kind: 'cancel' },
+        { label: '放弃改动并读取', kind: 'primary' },
+      ],
+    });
+    if (answer !== '放弃改动并读取') return;
+  }
   const version = state.contentVersion;
   state.loading = true;
   updateActions();
@@ -36,7 +51,7 @@ async function load(name) {
     buildForm();
     schedule();
   } catch (error) {
-    toast(`读取失败：${error.message}`, 'bad');
+    banner(`读取失败：${error.message}`);
   } finally {
     state.loading = false;
     updateActions();
@@ -77,73 +92,18 @@ async function save() {
     toast(`已写入 ${result.path}${tail}`, 'good');
     if (version === state.contentVersion) showBlanks(result.blanks);
   } catch (error) {
-    toast(`保存失败：${error.message}`, 'bad', 5200);
+    banner(`保存失败：${error.message}`);
   } finally {
     state.saving = false;
     updateActions();
   }
 }
-
-async function build() {
-  if (el.render.disabled) return;
-  const version = state.previewVersion;
-  state.building = true;
-  updateActions();
-  try {
-    const result = await api('/api/render', {
-      method: 'POST',
-      body: JSON.stringify({
-        content: state.content,
-        theme: el.theme.value,
-      }),
-    });
-    if (version === state.previewVersion) {
-      showDownloads(result.files);
-      toast(`已生成到 ${result.out_dir}`, 'good');
-    } else {
-      toast('生成期间内容已变化，旧版本已生成；请为当前内容重新生成 PDF。');
-    }
-  } catch (error) {
-    toast(error.message, 'bad', 6500);
-  } finally {
-    state.building = false;
-    updateActions();
-  }
-}
-
-// 能内联查看的类型：新标签页里交给浏览器自带的 PDF 阅读器 / 图片查看器。
-// HTML 不给「查看」——内联打开等于让生成的页面脚本跑在本服务的源下。
-const INLINE_KINDS = new Set(['pdf', 'png']);
-
-function artifactUrl(name, inline) {
-  const suffix = inline ? '&inline=1' : '';
-  return `/api/artifact?name=${encodeURIComponent(name)}${suffix}`;
-}
-
-function showDownloads(files) {
-  el.downloads.textContent = '';
-  ['pdf', 'png', 'html'].forEach((kind) => {
-    const name = files[kind];
-    if (!name) return;
-    if (INLINE_KINDS.has(kind)) {
-      const view = node('a', null, `${kind.toUpperCase()} 查看`);
-      view.href = artifactUrl(name, true);
-      view.target = '_blank';
-      view.rel = 'noopener';
-      view.title = `在浏览器里打开 ${name}`;
-      el.downloads.append(view);
-    }
-    const link = node('a', null, `${kind.toUpperCase()} 下载`);
-    link.href = artifactUrl(name, false);
-    link.title = `下载 ${name}`;
-    el.downloads.append(link);
-  });
-}
-
 function clean() {
   state.dirty = false;
   el.save.classList.remove('dirty');
 }
+
+/* ---------- 启动 ---------- */
 
 function fillContentList() {
   el.list.textContent = '';

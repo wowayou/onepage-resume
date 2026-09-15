@@ -68,9 +68,18 @@ class Element {
     }
     return null;
   }
-  remove() {}
+  remove() { this.removed = true; }
   focus() {}
-  addEventListener() {}
+  showModal() { this.open = true; }
+  close() { this.open = false; }
+  addEventListener(type, handler) {
+    if (!this.listeners) this.listeners = new Map();
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type).push(handler);
+  }
+  dispatch(type, event = {}) {
+    for (const handler of (this.listeners?.get(type) || [])) handler(event);
+  }
 }
 
 async function createApp() {
@@ -84,9 +93,9 @@ async function createApp() {
         return elements.get(name);
       },
       createElement: (tag) => new Element(tag),
+      body: new Element('body'),
     },
     window: { addEventListener() {} },
-    confirm: () => true,
     setTimeout: (callback) => { timers.add(callback); return callback; },
     clearTimeout: (callback) => timers.delete(callback),
     fetch: (url, options) => new Promise((resolve) => {
@@ -100,16 +109,18 @@ async function createApp() {
     }),
     console: { log() {} },
   });
-  const files = ['util.js', 'ui.js', 'form.js', 'preview.js', 'io.js', 'app.js'];
+  // 与 index.html 里的 <script> 顺序一致——顺序错了会在加载期就撞上未定义的名字。
+  const files = ['ui.js', 'form.js', 'preview.js', 'export.js', 'files.js', 'app.js'];
   const sources = files.map((file) => fs.readFileSync(path.join(root, 'webui', file), 'utf8'));
-  vm.runInContext(sources.join('\n') + '\nglobalThis.app = {state, el, touched, schedule, preview, load, save, build, updateActions};', context);
+  vm.runInContext(sources.join('\n') + '\nglobalThis.app = {state, el, touched, schedule, '
+    + 'preview, load, save, build, updateActions, dialog, api, fromInput, toInput};', context);
   requests.shift().reply({
     ...info, contents: [], protected: [], themes: ['theme.toml'],
     default_theme: 'theme.toml', default_content: null,
     default_content_name: 'content.toml', out_dir: '/tmp/build', png: true,
   });
   await new Promise((resolve) => setImmediate(resolve));
-  return { ...context.app, requests, timers };
+  return { ...context.app, requests, timers, document: context.document };
 }
 
 function previewResult(overrides = {}) {
@@ -117,7 +128,18 @@ function previewResult(overrides = {}) {
     preview_mode: 'pdf', shown_pages: 1, width: 794, height: 1123, ...overrides };
 }
 
-// 原有的 fromInput/toInput 测试已移除，因为这些函数已被内联到 form.js 的 fieldView 中
+test('Python and browser share every whitespace separator and preserve example arrays', async () => {
+  const app = await createApp();
+  for (const { text, expected } of info.cases) {
+    assert.deepEqual(Array.from(app.fromInput({ kind: 'list' }, text)), expected);
+  }
+  for (const items of info.samples) {
+    const field = { kind: 'list' };
+    assert.deepEqual(Array.from(app.fromInput(field, app.toInput(field, items))), items);
+  }
+  assert.deepEqual(Array.from(app.fromInput({ kind: 'list' }, 'Python / https://example.com/a/b')),
+    ['Python', 'https://example.com/a/b']);
+});
 
 test('old preview responses cannot validate or replace newer content', async () => {
   const app = await createApp();
@@ -233,68 +255,80 @@ test('build offers view and download links, but never an inline HTML', async () 
   assert.ok(!links[4].href.includes('inline'));
 });
 
-test('error JSON carries a code field', async () => {
-  const app = await createApp();
-  app.state.fileName = 'content.toml';
-  app.state.fileRevision = 'revision';
-  const pending = app.save();
-  app.requests.shift().reply({ error: 'file was modified', code: 'modified' }, 409);
-  await pending;
-  // 应该能识别出 code，但这里只验证 JSON 结构被正确接收
-  // 实际的冲突处理逻辑在 io.js 里
-});
 
-test('dialog resolves with the pressed button', async () => {
-  // 创建一个简单的 DOM 环境来测试 dialog
-  const createdElements = [];
-  const clickHandlers = new Map();
-  
-  const context = vm.createContext({
-    document: {
-      createElement: (tag) => {
-        const el = new Element(tag);
-        createdElements.push(el);
-        const originalAddListener = el.addEventListener;
-        el.addEventListener = (event, handler) => {
-          if (event === 'click') {
-            if (!clickHandlers.has(el)) clickHandlers.set(el, []);
-            clickHandlers.get(el).push(handler);
-          }
-          originalAddListener.call(el, event, handler);
-        };
-        return el;
-      },
-      body: { appendChild() {} },
-    },
-  });
-  
-  const source = fs.readFileSync(path.join(root, 'webui', 'ui.js'), 'utf8');
-  vm.runInContext(source, context);
-  
-  const promise = context.dialog({
-    title: 'Test',
-    message: 'Choose',
+// 找到某个元素底下的全部按钮（对话框的按钮在 .dialog-actions 里）
+function buttonsIn(box) {
+  const row = box.children.find((child) => child.className === 'dialog-actions');
+  return row ? row.children.filter((child) => child.tagName === 'BUTTON') : [];
+}
+
+test('dialog resolves with the pressed button, and ESC counts as the cancel button', async () => {
+  const app = await createApp();
+
+  const clicked = app.dialog({
+    title: '当前改动还没保存',
+    message: '读取 content.other.toml 会丢掉这些改动。',
     buttons: [
-      { label: 'Cancel', kind: 'ghost' },
-      { label: 'OK', kind: 'solid' },
+      { label: '取消', kind: 'cancel' },
+      { label: '放弃改动并读取', kind: 'primary' },
     ],
   });
-  
-  // 确认返回的是 Promise
-  assert.ok(promise && typeof promise.then === 'function', 'dialog should return a Promise');
-  
-  // 找到创建的按钮并触发第二个按钮的点击
-  const buttons = createdElements.filter(el => el.tagName === 'BUTTON');
-  assert.equal(buttons.length, 2);
-  assert.equal(buttons[0].textContent, 'Cancel');
-  assert.equal(buttons[1].textContent, 'OK');
-  
-  // 触发 OK 按钮的点击
-  const okHandlers = clickHandlers.get(buttons[1]) || [];
-  assert.ok(okHandlers.length > 0, 'OK button should have click handler');
-  okHandlers[0]();
-  
-  // 验证 Promise resolve 的值
-  const pressed = await promise;
-  assert.equal(pressed, 'OK');
+  const first = app.document.body.children.at(-1);
+  assert.equal(first.tagName, 'DIALOG');
+  assert.equal(first.open, true, '对话框应当被 showModal() 打开');
+
+  const buttons = buttonsIn(first);
+  assert.deepEqual(buttons.map((button) => button.textContent), ['取消', '放弃改动并读取']);
+  buttons[1].dispatch('click');
+  assert.equal(await clicked, '放弃改动并读取');
+  assert.equal(first.removed, true, '关闭后应当从 DOM 里摘掉');
+
+  // ESC（<dialog> 的 cancel 事件）= 点那个 kind: 'cancel' 的按钮，不能让 Promise 悬着
+  const escaped = app.dialog({
+    title: 't', message: 'm',
+    buttons: [{ label: '取消', kind: 'cancel' }, { label: '继续', kind: 'primary' }],
+  });
+  const second = app.document.body.children.at(-1);
+  second.dispatch('cancel', { preventDefault() {} });
+  assert.equal(await escaped, '取消');
+});
+
+test('every POST carries a JSON content type, or the server refuses it', async () => {
+  // 这条守的是一个真实踩过的坑：api() 少写了 Content-Type，浏览器就按 text/plain 发，
+  // 服务端的 body_json() 只收 application/json，于是预览、保存、生成全部 400。
+  const app = await createApp();
+
+  app.state.fileName = 'content.toml';
+  app.state.fileRevision = 'revision';
+  app.touched();
+  const saving = app.save();
+  const saveRequest = app.requests.shift();
+  assert.equal(saveRequest.options.method, 'POST');
+  assert.equal(saveRequest.options.headers['Content-Type'], 'application/json');
+  saveRequest.reply({
+    name: 'content.toml', path: '/tmp/content.toml', revision: 'saved', blanks: [],
+  });
+  await saving;
+
+  const previewing = app.preview();
+  const previewRequest = app.requests.shift();
+  assert.equal(previewRequest.options.headers['Content-Type'], 'application/json');
+  previewRequest.reply(previewResult());
+  await previewing;
+});
+
+test('server error codes reach the caller instead of being flattened to a message', async () => {
+  const app = await createApp();
+  const pending = app.api('/api/save', { method: 'POST', body: '{}' })
+    .then(() => null, (reason) => reason);
+  app.requests.shift().reply(
+    { error: '已被别的窗口改过', code: 'modified', name: 'content.toml', revision: 'now' },
+    409,
+  );
+  const error = await pending;
+  assert.equal(error.message, '已被别的窗口改过');
+  assert.equal(error.code, 'modified');
+  assert.equal(error.status, 409);
+  assert.equal(error.detail.name, 'content.toml');
+  assert.equal(error.detail.revision, 'now');
 });

@@ -57,6 +57,9 @@
       <span id="downloads" class="downloads"></span>
     </div>
 
+    <!-- 持久横幅的落点：读取 / 保存 / 生成失败时停在这里，直到你关掉它 -->
+    <div id="banners" class="banners" role="alert" aria-live="assertive"></div>
+
     <div id="paper" class="paper">
       <!-- 简历本身没有脚本；sandbox 留空表示什么都不许它做，只当纸看。 -->
       <div class="paper-fit">
@@ -68,11 +71,13 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script src="/static/util.js"></script>
+<!-- 加载顺序有讲究：前面几个文件只声明函数和常量，app.js 负责建 state / el、
+     绑事件、启动。顺序错了会在加载期就撞上未定义的名字。 -->
 <script src="/static/ui.js"></script>
 <script src="/static/form.js"></script>
 <script src="/static/preview.js"></script>
-<script src="/static/io.js"></script>
+<script src="/static/export.js"></script>
+<script src="/static/files.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

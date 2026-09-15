@@ -1,52 +1,83 @@
-/* 主流程：状态、启动、事件绑定。 */
+/* 主流程：状态、接口调用、启动、事件绑定。这个文件最后加载。
+ *
+ * 加载顺序（见 index.html）：ui → form → preview → export → files → app。
+ * 前面几个文件只有函数声明和常量，不碰 DOM；一碰 DOM 就得等这里把 state / el
+ * 建好，所以元素查找、事件绑定、boot() 全部留在这个文件里。
+ */
 
 'use strict';
+
+const state = {
+  blocks: [],                   // 字段表
+  content: {},                  // 当前表单内容，形状与 content.toml 一致
+  contents: [],                 // 内容目录里可选的文件名
+  themes: [],
+  protected: [],
+  outDir: '',
+  dirty: false,                 // 有没有未保存的改动
+  timer: null,
+  inflight: false,
+  ready: false,
+  loading: false,
+  saving: false,
+  building: false,
+  contentVersion: 0,
+  previewVersion: 0,
+  previewReady: false,
+  previewWidth: 794,
+  pages: null,
+  blanks: [],
+  fileName: null,
+  fileRevision: null,
+  listSeparator: null,
+  trimPattern: null,
+  defaultContentName: '',        // 新建表单的默认文件名，来自 /api/bootstrap
+};
 
 const el = {
   form: document.getElementById('form'),
   jump: document.getElementById('jump'),
+  sheet: document.getElementById('sheet'),
+  paper: document.getElementById('paper'),
+  name: document.getElementById('content-name'),
+  list: document.getElementById('content-list'),
+  theme: document.getElementById('theme-name'),
+  pages: document.getElementById('stat-pages'),
+  blanks: document.getElementById('stat-blanks'),
+  file: document.getElementById('stat-file'),
+  mode: document.getElementById('stat-mode'),
+  downloads: document.getElementById('downloads'),
+  toast: document.getElementById('toast'),
+  banners: document.getElementById('banners'),
   load: document.getElementById('btn-load'),
   save: document.getElementById('btn-save'),
   render: document.getElementById('btn-render'),
-  name: document.getElementById('content-name'),
-  file: document.getElementById('stat-file'),
-  list: document.getElementById('content-list'),
-  theme: document.getElementById('theme-name'),
-  paper: document.getElementById('paper'),
-  sheet: document.getElementById('sheet'),
-  mode: document.getElementById('stat-mode'),
-  pages: document.getElementById('stat-pages'),
-  blanks: document.getElementById('stat-blanks'),
-  downloads: document.getElementById('downloads'),
 };
 
-const state = {
-  ready: false,               // 是否已读到 bootstrap
-  loading: false,             // 正在读取内容文件
-  saving: false,              // 正在保存
-  building: false,            // 正在生成 PDF
-  dirty: false,               // 是否有未保存改动
-  inflight: false,            // 预览请求在途中
-  previewReady: false,        // 当前预览是否可用
-  contentVersion: 0,          // 内容版本号，读/存时用来检测冲突
-  previewVersion: 0,          // 预览版本号，用来丢弃过期的预览结果
-  timer: null,                // schedule() 的定时器
-  content: {},                // 当前表单数据
-  fileName: '',               // 当前打开的文件名
-  fileRevision: null,         // 文件修改时间戳，用于冲突检测
-  blocks: [],                 // schema 定义的区块列表
-  contents: [],               // 可用的内容文件列表
-  protected: [],              // 只读的示例文件列表
-  themes: [],                 // 可用主题列表
-  listSeparator: null,        // list 字段的分隔符正则
-  trimPattern: null,          // 空白修剪正则
-  defaultContentName: '',     // 默认内容文件名
-  outDir: '',                 // 输出目录路径
-  pages: 0,                   // 当前页数
-  blanks: [],                 // 空白字段列表
-  previewWidth: 595,          // A4 宽度（像素）
-};
+/* ---------- 接口 ---------- */
 
+/** 统一的请求包装：一律带 JSON 头，失败时把服务端的错误码和附加字段一起抛出来。
+ *
+ * 服务端的错误体是 {"error": "给人看的话", "code": "machine_code", …}，
+ * 除 error 外的字段（code、locations、pages、name…）挂在 error.detail 上，
+ * 调用方想按错误码分支时用它，不必去解析文案。
+ */
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error || `${response.status} ${response.statusText}`);
+    error.status = response.status;
+    error.code = payload.code || null;
+    const { error: _message, ...rest } = payload;
+    error.detail = rest;
+    throw error;
+  }
+  return payload;
+}
 async function boot() {
   let info;
   try {
