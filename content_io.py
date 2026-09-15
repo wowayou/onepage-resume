@@ -17,11 +17,23 @@ class ConflictError(ValueError):
 
 
 class ExistsError(ConflictError):
-    """目标已存在（另存为撞名）。"""
+    """目标已存在，而调用方以为在新建（另存为撞名）。"""
 
 
 class ModifiedError(ConflictError):
-    """文件在读取之后被改过（版本不符）。"""
+    """文件在读取之后被改过（别人改了同一个文件）。"""
+
+
+class VariantError(ValueError):
+    """定制版（写了 extends）不能被整份重写。
+
+    单独一个类型是为了让网页能把它映射成 403 并说清原因，而不是笼统的 400——
+    用户看到"不能整份重写、请直接编辑"才知道下一步该干什么。
+    """
+
+
+class InvalidNameError(ValueError):
+    """文件名不合法：带路径分隔符、是 Windows 保留名、过长等。"""
 
 
 # 内容文件与版式文件的文件名规则。CLI 的继承闸门与网页的文件闸门共用这一份，
@@ -55,23 +67,23 @@ def plain_name(name: str) -> str:
     if (not isinstance(name, str) or not name or name != name.strip()
             or name.startswith(".") or name.endswith(".")
             or re.search(r'[\\/<>:"|?*\x00-\x1f\x7f]', name)):
-        raise ValueError(f"文件名不合法：{name!r}")
+        raise InvalidNameError(f"文件名不合法：{name!r}")
     if len(name.encode("utf-8")) > 240:
-        raise ValueError("文件名过长，请缩短到 240 个 UTF-8 字节以内。")
+        raise InvalidNameError("文件名过长，请缩短到 240 个 UTF-8 字节以内。")
     stem = name.split(".", 1)[0].upper()
     if stem in {"CON", "PRN", "AUX", "NUL"} or re.fullmatch(r"(?:COM|LPT)[1-9]", stem):
-        raise ValueError(f"文件名是 Windows 保留名称：{name!r}")
+        raise InvalidNameError(f"文件名是 Windows 保留名称：{name!r}")
     return name
 
 
 def safe_name(name: str, pattern: str, base: Path) -> Path:
     plain_name(name)
     if not Path(name).match(pattern):
-        raise ValueError(f"只接受匹配 {pattern} 的文件：{name!r}")
+        raise InvalidNameError(f"只接受匹配 {pattern} 的文件：{name!r}")
     base = base.resolve()
     path = base / name
     if path.is_symlink() or path.resolve().parent != base:
-        raise ValueError(f"路径越界或是符号链接：{name!r}")
+        raise InvalidNameError(f"路径越界或是符号链接：{name!r}")
     return path
 
 
@@ -184,24 +196,34 @@ def save_content(path: Path, text: str, expected_revision: str | None) -> tuple[
         raise ValueError(f"拒绝写入符号链接：{path.name}")
     previous = path.read_bytes() if path.exists() else None
     current_revision = revision(previous) if previous is not None else None
-    
-    # 分开两种冲突：新文件撞名 vs 版本不符
+    existing = None
+    if previous is not None:
+        try:
+            existing = tomllib.loads(previous.decode("utf-8"))
+        except (ValueError, UnicodeError):
+            existing = None      # 坏文件交给下面的版本检查去拒绝，不在这里炸
+
+    # 定制版永远不许整份重写。这比"文件已存在"更具体，所以先判它——
+    # 否则用户看到的会是"已存在，换个名字"，而他真正该做的是直接编辑那个文件。
+    if existing is not None and ("extends" in existing or "keep" in existing):
+        inherited = existing.get("extends")
+        detail = f"继承 {inherited}" if inherited else "写了 [keep]"
+        raise VariantError(
+            f"{path.name} 是定制版（{detail}），不能整份重写；请直接编辑该文件。")
+
+    # 再分开两种冲突：以为在新建、但文件已存在 vs 读到的版本已经过期。
     if current_revision != expected_revision:
         if expected_revision is None:
-            # 以为是新建，但文件已存在
             raise ExistsError(f"{path.name} 已存在，换个名字或选择覆盖。")
-        else:
-            # 期望某个版本，但文件已被改动
-            raise ModifiedError(
-                f"{path.name} 在你读取之后被改过（可能是另一个窗口或编辑器），"
-                f"请重新读取后再保存。"
-            )
+        raise ModifiedError(
+            f"{path.name} 在你读取之后被改过（可能是另一个窗口或编辑器），"
+            f"请重新读取后再保存。"
+        )
+
     backup = None
     if previous is not None:
-        existing = tomllib.loads(previous.decode("utf-8"))
-        if "extends" in existing or "keep" in existing:
-            raise ValueError(f"{path.name} 是定制版，不能整份重写；请直接编辑该文件。")
-        schema.validate_types(existing)
+        if existing is not None:
+            schema.validate_types(existing)
         backup = path.with_suffix(path.suffix + ".bak")
         atomic_write(backup, previous)
     atomic_write(path, raw)

@@ -337,14 +337,25 @@ class ResumeBuilder:
 """
 
 
+class PageOverflow(RuntimeError):
+    """内容超出了一页。带上页数，好让调用方原样报给用户。
+
+    仍然继承 RuntimeError：命令行和既有测试都按 RuntimeError 接它。
+    """
+
+    def __init__(self, pages: int):
+        super().__init__(
+            f"渲染出了 {pages} 页，这份简历必须是一页。"
+            "请精简 content.toml，不要靠缩小字号硬塞。"
+        )
+        self.pages = pages
+
+
 def render_pdf(markup: str, pdf_path: Path) -> None:
     document = HTML(string=markup, base_url=str(HERE)).render()
     pages = len(document.pages)
     if pages != 1:
-        raise RuntimeError(
-            f"渲染出了 {pages} 页，这份简历必须是一页。"
-            "请精简 content.toml，不要靠缩小字号硬塞。"
-        )
+        raise PageOverflow(pages)
     document.write_pdf(pdf_path)
 
 

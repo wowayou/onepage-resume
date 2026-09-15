@@ -162,6 +162,14 @@ def for_preview(content: dict) -> dict:
 
 # ---------- 路径闸门 ----------
 
+def current_revision(path: Path) -> str | None:
+    """磁盘上那个文件此刻的版本号；不存在就是 None。给"被别的窗口改过"提示用。"""
+    try:
+        return content_io.revision(path.read_bytes())
+    except OSError:
+        return None
+
+
 def safe_basename(name: str) -> str:
     return content_io.plain_name(name)
 
@@ -405,8 +413,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.do_render()
             else:
                 self.fail(HTTPStatus.NOT_FOUND, "没有这个地址。")
+        # 顺序有讲究：子类必须排在父类前面，否则会被父类先接走。
+        # 每个分支都带一个机器可读的 code——前端靠它分支，不靠解析文案。
         except ApiError as error:
             self.fail(error.status, str(error), error.code, **error.extra)
+        except content_io.InvalidNameError as error:
+            self.fail(HTTPStatus.BAD_REQUEST, str(error), "invalid_name")
+        except content_io.VariantError as error:
+            self.fail(HTTPStatus.FORBIDDEN, str(error), "variant")
         except content_io.ExistsError as error:
             self.fail(HTTPStatus.CONFLICT, str(error), "exists")
         except content_io.ModifiedError as error:
@@ -414,14 +428,15 @@ class Handler(BaseHTTPRequestHandler):
         except content_io.ConflictError as error:
             self.fail(HTTPStatus.CONFLICT, str(error), "conflict")
         except (ValueError, RecursionError) as error:
-            self.fail(HTTPStatus.BAD_REQUEST, str(error))
+            self.fail(HTTPStatus.BAD_REQUEST, str(error), "bad_request")
         except FileNotFoundError as error:
-            self.fail(HTTPStatus.NOT_FOUND, str(error))
+            self.fail(HTTPStatus.NOT_FOUND, str(error), "not_found")
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception as error:                      # noqa: BLE001 - 兜底成 JSON
             self.log_error("%s %s 出错：%r", self.command, path, error)
-            self.fail(HTTPStatus.INTERNAL_SERVER_ERROR, f"{type(error).__name__}: {error}")
+            self.fail(HTTPStatus.INTERNAL_SERVER_ERROR,
+                      f"{type(error).__name__}: {error}", "internal")
 
     # ---- 各个接口 ----
 
@@ -506,9 +521,11 @@ class Handler(BaseHTTPRequestHandler):
         name = payload.get("name") or content_io.DEFAULT_CONTENT_NAME
         path = safe_name(name, CONTENT_GLOB, self.studio.content_dir)
         if path.name in PROTECTED_CONTENT:
-            raise ValueError(
+            raise ApiError(
+                HTTPStatus.FORBIDDEN, "protected",
                 f"{path.name} 是仓库里跟踪的虚构示例，不能写。"
-                f"换个名字，比如 {content_io.DEFAULT_CONTENT_NAME} 或 content.acme.toml。"
+                f"换个名字，比如 {content_io.DEFAULT_CONTENT_NAME} 或 content.acme.toml。",
+                name=path.name,
             )
 
         content = shape(payload.get("content", {}))
@@ -517,8 +534,20 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("文件版本必须是字符串。")
         with self.studio.save_lock:
             # 定制版不许整份重写、已有文件必须先读到同一版本，都由 save_content 一处把关。
-            backup, revision = content_io.save_content(
-                path, fill.dump_toml(content), expected_revision)
+            # 这里把它的三种拒绝翻译成带 code 的 API 错误：前端要据此决定下一步
+            # （撞名 → 问是否覆盖；被改过 → 提示重新读取；定制版 → 引导另存为）。
+            try:
+                backup, revision = content_io.save_content(
+                    path, fill.dump_toml(content), expected_revision)
+            except content_io.ExistsError as error:
+                raise ApiError(HTTPStatus.CONFLICT, "exists", str(error),
+                               name=path.name) from error
+            except content_io.ModifiedError as error:
+                raise ApiError(HTTPStatus.CONFLICT, "modified", str(error),
+                               name=path.name, revision=current_revision(path)) from error
+            except content_io.VariantError as error:
+                raise ApiError(HTTPStatus.FORBIDDEN, "variant", str(error),
+                               name=path.name) from error
         self.send_json({
             "path": str(path),
             "name": path.name,
@@ -534,15 +563,19 @@ class Handler(BaseHTTPRequestHandler):
         if blanks:
             # 和 render.py 同一个立场：宁可停下，也不出一份带空标题的 PDF——
             # 那种 PDF 看上去是"成功了"的，最容易就这么发出去。
-            raise ValueError("还有 %d 处空白没填，先补齐：\n%s"
-                             % (len(blanks), "\n".join(blanks)))
+            # 除了文案，还把每个空的位置结构化地带上：前端可以点着跳过去。
+            raise ApiError(
+                HTTPStatus.BAD_REQUEST, "blanks",
+                "还有 %d 处空白没填，先补齐：\n%s" % (len(blanks), "\n".join(blanks)),
+                locations=schema.find_blank_locations(content),
+            )
 
         basename = safe_basename(render.resolve_basename(payload.get("basename"), content))
         try:
             result = self.studio.build(content, payload.get("theme"), basename)
-        except RuntimeError as error:       # 超过一页
-            self.fail(HTTPStatus.UNPROCESSABLE_ENTITY, str(error))
-            return
+        except render.PageOverflow as error:    # 超过一页
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "overflow",
+                           str(error), pages=error.pages) from error
         self.send_json(result)
 
 

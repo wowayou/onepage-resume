@@ -461,7 +461,9 @@ class HttpTest(ServerTestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.post("/api/save", {"name": path.name, "revision": loaded["revision"],
                                    "content": loaded["content"]})
-        self.assertEqual(caught.exception.code, 400)
+        # 403 而不是笼统的 400：前端要靠这个码把"请直接编辑该文件"说清楚。
+        self.assertEqual(caught.exception.code, 403)
+        self.assertEqual(json.loads(caught.exception.read())["code"], "variant")
         self.assertEqual(path.read_bytes(), original)
 
 
@@ -557,7 +559,78 @@ class SaveApiTest(ServerTestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.post("/api/save", {"name": render.EXAMPLE_CONTENT,
                                     "content": example_content()})
-        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(caught.exception.code, 403)
+        self.assertEqual(json.loads(caught.exception.read())["code"], "protected")
+
+    def error_body(self, path: str, payload: dict, headers: dict | None = None):
+        """发一个注定失败的请求，返回 (状态码, 响应体)。"""
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post(path, payload, headers)
+        return caught.exception.code, json.loads(caught.exception.read())
+
+    def test_error_json_carries_a_code(self):
+        """每个失败都带一个机器可读的 code。
+
+        文案是给人看的、会改；前端靠 code 分支，所以每一个都必须存在，
+        而且要和 HTTP 状态码对得上（见方案 4.1 的表）。
+        """
+        example = example_content()
+
+        # 仓库里跟踪的示例：只读
+        status, body = self.error_body("/api/save",
+                                       {"name": render.EXAMPLE_CONTENT, "content": example})
+        self.assertEqual((status, body["code"]), (403, "protected"))
+        self.assertEqual(body["name"], render.EXAMPLE_CONTENT)
+
+        # 另存为撞名
+        target = self.dir / "content.codes.toml"
+        self.post("/api/save", {"name": target.name, "content": example})
+        status, body = self.error_body("/api/save", {"name": target.name, "content": example})
+        self.assertEqual((status, body["code"]), (409, "exists"))
+        self.assertEqual(body["name"], target.name)
+
+        # 读到的版本已经过期
+        status, body = self.error_body("/api/save", {"name": target.name, "content": example,
+                                                     "revision": "deadbeef"})
+        self.assertEqual((status, body["code"]), (409, "modified"))
+        self.assertEqual(body["name"], target.name)
+        self.assertNotEqual(body["revision"], "deadbeef")   # 磁盘上现在那一版
+
+        # 定制版只读
+        variant = self.dir / "content.codes-variant.toml"
+        variant.write_text('extends = "content.toml"\n', encoding="utf-8")
+        status, body = self.error_body("/api/save", {"name": variant.name, "content": example})
+        self.assertEqual((status, body["code"]), (403, "variant"))
+
+        # 还有空白：除了文案，还要带结构化的位置
+        status, body = self.error_body("/api/render", {"content": {}})
+        self.assertEqual((status, body["code"]), (400, "blanks"))
+        self.assertTrue(body["locations"])
+        for location in body["locations"]:
+            self.assertEqual(set(location),
+                             {"block", "index", "field", "item", "section", "message"})
+
+        # 超过一页：带上页数
+        content = example_content()
+        content["experiences"] = content["experiences"] * 6
+        status, body = self.error_body("/api/render", {"content": content})
+        self.assertEqual((status, body["code"]), (422, "overflow"))
+        self.assertGreater(body["pages"], 1)
+
+        # 文件名不合法
+        status, body = self.error_body("/api/save", {"name": "notes.toml", "content": example})
+        self.assertEqual((status, body["code"]), (400, "invalid_name"))
+
+        # 要读的文件不存在
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get("/api/content?name=content.absent.toml")
+        self.assertEqual(caught.exception.code, 404)
+        self.assertEqual(json.loads(caught.exception.read())["code"], "not_found")
+
+        # 请求体不是 JSON：笼统的 bad_request
+        status, body = self.error_body("/api/save", {"content": example},
+                                       headers={"Content-Type": "text/plain"})
+        self.assertEqual((status, body["code"]), (400, "bad_request"))
 
     def test_refuses_a_name_outside_the_glob(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
