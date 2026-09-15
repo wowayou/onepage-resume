@@ -20,14 +20,14 @@ for block in schema.BLOCKS:
                 samples.append(row.get(field.key, []))
 print(json.dumps({'blocks': schema.describe(), 'input_rules': schema.input_rules(),
                  'cases': [{'text': text, 'expected': schema.split_list(text)} for text in cases],
-                 'samples': samples}))
+                 'samples': samples, 'example': content}))
 `], { cwd: root, encoding: 'utf8' }));
 
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag.toUpperCase();
     this.children = [];
-    this.value = '';
+    this._value = '';
     this.disabled = false;
     this.srcdoc = '';
     this.clientWidth = 900;
@@ -58,6 +58,10 @@ class Element {
 
   set textContent(value) { this.text = value; this.children = []; }
   get textContent() { return this.text || ''; }
+  // 真 DOM 的 input.value 只接受字符串，赋数组会被 String() 成 "a,b"。
+  // 基座照做——否则"把数组直接塞进 textarea"这种错在测试里看不出来。
+  set value(value) { this._value = value == null ? '' : String(value); }
+  get value() { return this._value; }
   append(...children) { this.children.push(...children); }
   appendChild(child) { this.children.push(child); }
   setAttribute(name, value) { this.attributes[name] = value; }
@@ -98,13 +102,23 @@ async function createApp() {
     window: { addEventListener() {} },
     setTimeout: (callback) => { timers.add(callback); return callback; },
     clearTimeout: (callback) => timers.delete(callback),
-    fetch: (url, options) => new Promise((resolve) => {
-      requests.push({
-        url, options,
-        reply: (payload, status = 200) => resolve({
-          ok: status === 200, status, statusText: 'Error',
-          json: async () => payload,
-        }),
+    fetch: (url, options = {}) => new Promise((resolve) => {
+      const headers = options.headers || {};
+      const isPost = String(options.method || 'GET').toUpperCase() === 'POST';
+      const entry = { url, options, headers, json: /^application\/json/.test(headers['Content-Type'] || '') };
+      requests.push(entry);
+      if (isPost && !entry.json) {
+        // webui.body_json() 只收 application/json。基座也照这个来：少了这个头
+        // 就直接 400，好过"少写一个头而所有用例照样绿"。
+        resolve({
+          ok: false, status: 400, statusText: 'Bad Request',
+          json: async () => ({ error: '只接受 application/json 请求。', code: 'bad_request' }),
+        });
+        return;
+      }
+      entry.reply = (payload, status = 200) => resolve({
+        ok: status === 200, status, statusText: 'Error',
+        json: async () => payload,
       });
     }),
     console: { log() {} },
@@ -113,7 +127,8 @@ async function createApp() {
   const files = ['ui.js', 'form.js', 'preview.js', 'export.js', 'files.js', 'app.js'];
   const sources = files.map((file) => fs.readFileSync(path.join(root, 'webui', file), 'utf8'));
   vm.runInContext(sources.join('\n') + '\nglobalThis.app = {state, el, touched, schedule, '
-    + 'preview, load, save, build, updateActions, dialog, api, fromInput, toInput};', context);
+    + 'preview, load, save, build, updateActions, dialog, api, fromInput, toInput, '
+    + 'buildForm, emptyContent};', context);
   requests.shift().reply({
     ...info, contents: [], protected: [], themes: ['theme.toml'],
     default_theme: 'theme.toml', default_content: null,
@@ -256,6 +271,16 @@ test('build offers view and download links, but never an inline HTML', async () 
 });
 
 
+// 把一棵假 DOM 子树摊平成数组，便于按值反查某个输入框
+function descendants(root) {
+  const out = [];
+  const walk = (element) => {
+    for (const child of element.children || []) { out.push(child); walk(child); }
+  };
+  walk(root);
+  return out;
+}
+
 // 找到某个元素底下的全部按钮（对话框的按钮在 .dialog-actions 里）
 function buttonsIn(box) {
   const row = box.children.find((child) => child.className === 'dialog-actions');
@@ -331,4 +356,26 @@ test('server error codes reach the caller instead of being flattened to a messag
   assert.equal(error.status, 409);
   assert.equal(error.detail.name, 'content.toml');
   assert.equal(error.detail.revision, 'now');
+});
+
+test('list and lines fields render as text, so what you see is what gets stored', async () => {
+  // 这条守的是另一半：字段必须以"人看到的样子"进输入框。list 用「空格 / 空格」、
+  // lines 一行一条；把数组直接赋给 textarea 会被 String() 成 "a,b"，纸面上才发现。
+  const app = await createApp();
+  app.state.content = structuredClone(info.example);
+  app.buildForm();
+  const fields = descendants(app.el.form);
+
+  // 用只在 bullet 里出现的词：技能行里也有 "GSC"，会先撞上那个单行输入框
+  const bullets = fields.find((element) => /月报/.test(element.value));
+  assert.equal(bullets.tagName, 'TEXTAREA');
+  assert.ok(bullets.value.includes('\n'), 'bullet 应当一行一条');
+  assert.ok(!bullets.value.includes(','), '不该留下数组被 String() 连起来的痕迹');
+
+  const crumbs = fields.find((element) => /2025\.09/.test(element.value));
+  assert.equal(crumbs.tagName, 'INPUT');
+  assert.ok(crumbs.value.includes(' / '), '面包屑应当用「空格 / 空格」分隔');
+
+  const summary = fields.find((element) => /两年英文网站内容/.test(element.value));
+  assert.equal(summary.tagName, 'TEXTAREA', '概况天生要写成几行字');
 });
