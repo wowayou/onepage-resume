@@ -23,10 +23,24 @@ print(json.dumps({'blocks': schema.describe(), 'input_rules': schema.input_rules
                  'samples': samples, 'example': content}))
 `], { cwd: root, encoding: 'utf8' }));
 
+/** 真 DOM 的 .children 是 HTMLCollection：能索引、能取 length、能迭代，
+ *  但没有 find / map / filter / at。基座照做——否则"在 HTMLCollection 上调用
+ *  数组方法"这种错只有到了真浏览器才会炸（export.js 就这么炸过一次）。 */
+function childrenOf(items) {
+  // 每次访问都重造一份，所以取到的总是当前的子节点（真 HTMLCollection 是活的）
+  const wrapper = { length: items.length, item: (index) => items[index] ?? null };
+  Object.defineProperty(wrapper, Symbol.iterator, { value: () => items[Symbol.iterator]() });
+  for (let index = 0; index < items.length; index += 1) wrapper[index] = items[index];
+  return wrapper;
+}
+
+/** 要数组方法时先摊平——测试里到处用，收成一个函数。 */
+function kids(element) { return [...element.children]; }
+
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag.toUpperCase();
-    this.children = [];
+    this._children = [];
     this._value = '';
     this.disabled = false;
     this.srcdoc = '';
@@ -57,19 +71,20 @@ class Element {
     };
   }
 
-  set textContent(value) { this.text = value; this.children = []; }
+  set textContent(value) { this.text = value; this._children = []; }
   get textContent() { return this.text || ''; }
   // 真 DOM 的 input.value 只接受字符串，赋数组会被 String() 成 "a,b"。
   // 基座照做——否则"把数组直接塞进 textarea"这种错在测试里看不出来。
   set value(value) { this._value = value == null ? '' : String(value); }
   get value() { return this._value; }
-  append(...children) { this.children.push(...children); }
-  appendChild(child) { this.children.push(child); }
+  get children() { return childrenOf(this._children); }
+  append(...children) { this._children.push(...children); }
+  appendChild(child) { this._children.push(child); }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
   querySelector(selector) {
     if (selector === 'button') {
-      return this.children.find(el => el.tagName === 'BUTTON');
+      return this._children.find((el) => el.tagName === 'BUTTON') || null;
     }
     return null;
   }
@@ -132,6 +147,7 @@ async function createApp() {
       entry.reply = (payload, status = 200) => resolve({
         ok: status === 200, status, statusText: 'Error',
         json: async () => payload,
+        blob: async () => new Blob([JSON.stringify(payload)]),
       });
     }),
     console: { log() {} },
@@ -140,10 +156,11 @@ async function createApp() {
   const files = ['ui.js', 'form.js', 'preview.js', 'export.js', 'files.js', 'app.js'];
   const sources = files.map((file) => fs.readFileSync(path.join(root, 'webui', file), 'utf8'));
   vm.runInContext(sources.join('\n') + '\nglobalThis.app = {state, el, touched, schedule, '
-    + 'preview, build, updateActions, dialog, api, fromInput, toInput, buildForm, '
+    + 'preview, updateActions, dialog, api, fromInput, toInput, buildForm, '
     + 'emptyContent, openFile, newFile, saveFile, saveAsFile, showHistory, '
     + 'fieldElement, toggleBlankList, jumpToBlank, updateBadge, relativeTime, '
-    + 'showBlanks, window};', context);
+    + 'showBlanks, window, showBuildDialog, runBuild, showResults, saveArtifactTo, '
+    + 'revealArtifact, canPickFiles};', context);
   requests.shift().reply({
     ...info, files: [], themes: ['theme.toml'],
     default_theme: 'theme.toml', default_content: null,
@@ -168,7 +185,7 @@ function previewResult(overrides = {}) {
 
 /** 找到最后弹出的那个对话框，按文字点一个按钮。 */
 function clickDialog(app, label) {
-  const box = app.document.body.children.at(-1);
+  const box = kids(app.document.body).at(-1);
   const buttons = buttonsIn(box);
   const button = buttons.find((item) => item.textContent === label);
   assert.ok(button, `对话框里没有「${label}」：${buttons.map((item) => item.textContent)}`);
@@ -193,7 +210,7 @@ test('switching files with unsaved edits asks first', async () => {
   const cancelled = app.openFile('content.other.toml');
   await flush();
   assert.equal(app.requests.length, 0, '还没问完就不该去读文件');
-  const labels = buttonsIn(app.document.body.children.at(-1)).map((item) => item.textContent);
+  const labels = buttonsIn(kids(app.document.body).at(-1)).map((item) => item.textContent);
   assert.deepEqual(labels, ['取消', '放弃改动', '保存后切换']);
   clickDialog(app, '取消');
   await cancelled;
@@ -217,11 +234,11 @@ test('untitled save opens save-as instead of inventing a name', async () => {
 
   const pending = app.saveFile();
   await flush();
-  const box = app.document.body.children.at(-1);
+  const box = kids(app.document.body).at(-1);
   assert.equal(box.tagName, 'DIALOG');
   assert.match(box.children[0].textContent, /另存为/);
   // 还没起名字：输入框空着，主按钮是禁用的，也没必要去问服务端
-  const input = box.children.find((child) => child.className === 'dialog-input');
+  const input = kids(box).find((child) => child.className === 'dialog-input');
   assert.equal(input.value, '');
   assert.equal(input.placeholder, 'content.toml');
   assert.equal(buttonsIn(box).find((item) => item.className === 'primary').disabled, true);
@@ -245,10 +262,10 @@ test('a modified conflict offers reload or save-as, never force', async () => {
   }, 409);
   await pending;
 
-  const banners = app.el.banners.children;
+  const banners = kids(app.el.banners);
   assert.equal(banners.length, 1);
-  const actions = banners[0].children.find((child) => child.className === 'banner-actions');
-  const labels = actions.children.map((item) => item.textContent);
+  const actions = kids(banners[0]).find((child) => child.className === 'banner-actions');
+  const labels = kids(actions).map((item) => item.textContent);
   assert.deepEqual(labels, ['重新读取（丢掉我的改动）', '另存为…']);
   assert.ok(!labels.some((label) => /强制|直接覆盖/.test(label)),
     '不许给"强制覆盖"这条路：那会盖掉别人刚写进去的内容');
@@ -268,7 +285,7 @@ test('draft is restored only after the user says so', async () => {
   await flush();
   app.requests.shift().reply(contentReply());
   await flush(10);
-  const box = app.document.body.children.at(-1);
+  const box = kids(app.document.body).at(-1);
   assert.equal(box.tagName, 'DIALOG');
   assert.match(box.children[0].textContent, /没保存的改动/);
   clickDialog(app, '丢弃');
@@ -392,8 +409,8 @@ test('save-as on an existing name asks before overwriting', async () => {
   const pending = app.saveFile();
   await flush();
 
-  const box = app.document.body.children.at(-1);
-  const input = box.children.find((child) => child.className === 'dialog-input');
+  const box = kids(app.document.body).at(-1);
+  const input = kids(box).find((child) => child.className === 'dialog-input');
   assert.ok(input, '另存为对话框里应当有一个文件名输入框');
   input.value = 'acme';
   input.dispatch('input');
@@ -435,49 +452,131 @@ test('loading does not discard edits made while the request was pending', async 
   assert.equal(app.state.dirty, true);
 });
 
-test('stale build results do not offer old downloads or re-enable generation', async () => {
+test('stale build results do not offer old files or re-enable generation', async () => {
   const app = await createApp();
   app.state.previewReady = true;
   app.state.pages = 1;
   app.updateActions();
-  const pending = app.build();
+  const pending = app.runBuild('resume', 'overwrite', false);
   app.touched();
-  app.requests.shift().reply({ files: { pdf: 'old.pdf' }, out_dir: '/tmp/build' });
+  app.requests.shift().reply({
+    basename: 'resume', files: { pdf: 'old.pdf' }, out_dir: '/tmp/build',
+  });
   await pending;
-  assert.equal(app.el.downloads.children.length, 0);
+  // 结果照给，但必须说清这是改动之前那一版——静默给一份错的更糟
+  assert.equal(kids(app.el.results).filter((c) => c.className === 'result-row').length, 1);
+  assert.match(kids(kids(app.el.banners).at(-1))[0].textContent, /改动之前那一版/);
   assert.equal(app.el.render.disabled, true);
   assert.equal(app.state.building, false);
 });
 
-test('build offers view and download links, but never an inline HTML', async () => {
+test('results offer view, download, save-to and reveal, but never an inline HTML', async () => {
   const app = await createApp();
   app.state.previewReady = true;
   app.state.pages = 1;
   app.updateActions();
-  const pending = app.build();
+  const pending = app.runBuild('简历', 'overwrite', false);
   app.requests.shift().reply({
+    basename: '简历',
     files: { pdf: '简历.pdf', png: '简历.png', html: '简历.html' },
     out_dir: '/tmp/build',
   });
   await pending;
-  const links = app.el.downloads.children.map((link) => ({
-    text: link.textContent, href: link.href, target: link.target, rel: link.rel,
-  }));
-  assert.deepEqual(links.map((link) => link.text),
-    ['PDF 查看', 'PDF 下载', 'PNG 查看', 'PNG 下载', 'HTML 下载']);
-  assert.match(links[0].href, /inline=1$/);
-  assert.equal(links[0].target, '_blank');
-  assert.equal(links[0].rel, 'noopener');
-  assert.ok(!links[1].href.includes('inline'));
-  assert.ok(!links[4].href.includes('inline'));
+
+  // 只数文件行；缺 PNG 时会另外多一条说明
+  const rows = kids(app.el.results).filter((child) => child.className === 'result-row');
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((row) => row.children[0].textContent), ['PDF', 'PNG', 'HTML']);
+  assert.deepEqual(rows.map((row) => row.children[1].textContent),
+    ['简历.pdf', '简历.png', '简历.html']);
+
+  const actionsOf = (row) => kids(kids(row)[2]);
+  assert.deepEqual(actionsOf(rows[0]).map((item) => item.textContent),
+    ['查看', '下载', '另存到…', '在文件夹中显示']);
+  // HTML 不给「查看」：内联打开等于让生成的页面脚本跑在本服务的源下
+  assert.deepEqual(actionsOf(rows[2]).map((item) => item.textContent),
+    ['下载', '另存到…', '在文件夹中显示']);
+
+  const view = actionsOf(rows[0])[0];
+  assert.match(view.href, /inline=1$/);
+  assert.equal(view.target, '_blank');
+  assert.equal(view.rel, 'noopener');
+  assert.ok(!actionsOf(rows[0])[1].href.includes('inline'));
+  assert.ok(!actionsOf(rows[2])[0].href.includes('inline'));
+
+  // 浏览器没有 File System Access API 时，「另存到…」明说为什么按不了
+  const saveTo = actionsOf(rows[0])[2];
+  assert.equal(saveTo.disabled, true);
+  assert.match(saveTo.title, /不支持选择保存位置/);
 });
+
+test('generate dialog asks on conflict and sends the chosen policy', async () => {
+  const app = await createApp();
+  app.state.previewReady = true;
+  app.state.pages = 1;
+  app.state.blanks = [];
+  app.state.content = structuredClone(info.example);
+  app.updateActions();
+
+  const pending = app.showBuildDialog();
+  await flush();
+  const box = kids(app.document.body).at(-1);
+  assert.equal(box.children[0].textContent, '生成 PDF');
+  // 预填 [document].output_basename
+  const input = kids(box).find((child) => child.className === 'dialog-input');
+  assert.equal(input.value, info.example.document.output_basename);
+
+  let stat = app.requests.shift();
+  assert.match(stat.url, /^\/api\/stat\?kind=artifact&name=/);
+  stat.reply({ name: 'resume', exists: true, conflict: 'resume.pdf', suggested: 'resume-2' });
+  await flush();
+
+  const choice = kids(box).find((child) => child.className === 'dialog-choice');
+  assert.equal(choice.hidden, false);
+  const radios = kids(choice).map((item) => kids(item)[0]);
+  assert.deepEqual(radios.map((radio) => radio.value), ['rename', 'overwrite']);
+  assert.equal(radios[0].checked, true, '默认应当是改名，不是覆盖');
+  radios[1].checked = true;
+  radios[1].dispatch('change');
+  await flush();
+
+  clickDialog(app, '生成');
+  await flush();
+  const render = app.requests.shift();
+  const body = JSON.parse(render.options.body);
+  assert.equal(body.if_exists, 'overwrite');
+  assert.equal(body.basename, 'resume');
+  render.reply({ basename: 'resume', files: { pdf: 'resume.pdf' }, out_dir: '/tmp/build' });
+  await pending;
+});
+
+test('generate dialog sends fail when nothing is in the way', async () => {
+  const app = await createApp();
+  app.state.previewReady = true;
+  app.state.pages = 1;
+  app.state.content = structuredClone(info.example);
+  app.updateActions();
+
+  const pending = app.showBuildDialog();
+  await flush();
+  app.requests.shift().reply({ name: 'resume', exists: false, suggested: 'resume-2' });
+  await flush();
+  clickDialog(app, '生成');
+  await flush();
+  const render = app.requests.shift();
+  assert.equal(JSON.parse(render.options.body).if_exists, 'fail',
+    '没撞名也要传 fail：万一这几秒里别人也生成了同名文件，宁可被拒一次');
+  render.reply({ basename: 'resume', files: { pdf: 'resume.pdf' }, out_dir: '/tmp/build' });
+  await pending;
+});
+
 
 
 // 把一棵假 DOM 子树摊平成数组，便于按值反查某个输入框
 function descendants(root) {
   const out = [];
   const walk = (element) => {
-    for (const child of element.children || []) { out.push(child); walk(child); }
+    for (const child of kids(element)) { out.push(child); walk(child); }
   };
   walk(root);
   return out;
@@ -485,8 +584,8 @@ function descendants(root) {
 
 // 找到某个元素底下的全部按钮（对话框的按钮在 .dialog-actions 里）
 function buttonsIn(box) {
-  const row = box.children.find((child) => child.className === 'dialog-actions');
-  return row ? row.children.filter((child) => child.tagName === 'BUTTON') : [];
+  const row = kids(box).find((child) => child.className === 'dialog-actions');
+  return row ? kids(row).filter((child) => child.tagName === 'BUTTON') : [];
 }
 
 test('dialog resolves with the pressed button, and ESC counts as the cancel button', async () => {
@@ -500,7 +599,7 @@ test('dialog resolves with the pressed button, and ESC counts as the cancel butt
       { label: '放弃改动并读取', kind: 'primary' },
     ],
   });
-  const first = app.document.body.children.at(-1);
+  const first = kids(app.document.body).at(-1);
   assert.equal(first.tagName, 'DIALOG');
   assert.equal(first.open, true, '对话框应当被 showModal() 打开');
 
@@ -515,7 +614,7 @@ test('dialog resolves with the pressed button, and ESC counts as the cancel butt
     title: 't', message: 'm',
     buttons: [{ label: '取消', kind: 'cancel' }, { label: '继续', kind: 'primary' }],
   });
-  const second = app.document.body.children.at(-1);
+  const second = kids(app.document.body).at(-1);
   second.dispatch('cancel', { preventDefault() {} });
   const escapedAnswer = await escaped;
   assert.equal(escapedAnswer.label, '取消');
@@ -582,4 +681,76 @@ test('list and lines fields render as text, so what you see is what gets stored'
 
   const summary = fields.find((element) => /两年英文网站内容/.test(element.value));
   assert.equal(summary.tagName, 'TEXTAREA', '概况天生要写成几行字');
+});
+
+/** 一个假的保存对话框：把写进去的字节记下来。 */
+function fakePicker(app, written) {
+  app.window.showSaveFilePicker = async (options) => ({
+    name: options.suggestedName,
+    createWritable: async () => ({
+      write: async (blob) => { written.push({ name: options.suggestedName, size: blob.size }); },
+      close: async () => {},
+    }),
+  });
+}
+
+test('save-to writes the served bytes through the browser picker', async () => {
+  const app = await createApp();
+  const written = [];
+  fakePicker(app, written);
+  assert.equal(app.canPickFiles(), true);
+
+  const pending = app.saveArtifactTo('简历.pdf');
+  await flush();
+  const request = app.requests.shift();
+  assert.match(request.url, /^\/api\/artifact\?name=/);
+  assert.ok(!request.url.includes('inline'), '另存到… 要的是附件，不是内联');
+  request.reply('PDF-BYTES');
+  await pending;
+
+  assert.equal(written.length, 1);
+  assert.equal(written[0].name, '简历.pdf');
+  assert.ok(written[0].size > 0, '写出去的应当是有内容的 blob');
+  assert.match(app.el.toast.textContent, /已保存到 简历.pdf/);
+});
+
+test('save-to says nothing when you cancel the picker', async () => {
+  const app = await createApp();
+  app.window.showSaveFilePicker = async () => {
+    const error = new Error('The user aborted a request.');
+    error.name = 'AbortError';
+    throw error;
+  };
+  await app.saveArtifactTo('简历.pdf');
+  assert.equal(app.el.banners.children.length, 0, '自己点了取消不该弹错');
+  assert.equal(app.requests.length, 0, '取消了就别去下载');
+});
+
+test('save-to explains itself when the browser wants a fresh gesture', async () => {
+  // 生成要渲一遍 PDF，等回来时"用户刚点过"的有效期可能已经过了。
+  // Chrome 按规范抛 SecurityError——这不是错，得说清下一步该点哪。
+  const app = await createApp();
+  app.window.showSaveFilePicker = async () => {
+    const error = new Error("Failed to execute 'showSaveFilePicker': "
+      + 'Must be handling a user gesture to show a file picker.');
+    error.name = 'SecurityError';
+    throw error;
+  };
+  await app.saveArtifactTo('简历.pdf');
+  const banner = kids(app.el.banners).at(-1);
+  assert.match(kids(banner)[0].textContent, /亲手点一下「另存到…」/);
+});
+
+test('save-to is offered only when the browser can pick a location', async () => {
+  const app = await createApp();
+  assert.equal(app.canPickFiles(), false, '基座默认没有 File System Access API');
+  app.state.previewReady = true;
+  app.state.pages = 1;
+  app.showResults({ basename: 'x', out_dir: '/tmp/build', files: { pdf: 'x.pdf' } });
+  // 只有 PDF 时下面还会多一条"没有 PNG"的说明，所以按类名找那一行
+  const row = kids(app.el.results).find((child) => child.className === 'result-row');
+  const saveTo = kids(row)[2];
+  const button = [...kids(saveTo)].find((item) => item.textContent === '另存到…');
+  assert.equal(button.disabled, true);
+  assert.match(button.title, /不支持选择保存位置/);
 });

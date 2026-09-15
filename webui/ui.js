@@ -93,6 +93,9 @@ function dialog({ title, message, input, buttons, open, onInput }) {
 
     const controls = {
       close: finish,
+      // 输入框直接给出去：调用方不该自己去 .children 里翻——真 DOM 的 children
+      // 是 HTMLCollection，没有 find / map。
+      field,
       setMessage(text) {
         if (messageElement) messageElement.textContent = text;
       },

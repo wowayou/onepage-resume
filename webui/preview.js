@@ -28,7 +28,11 @@ function schedule() {
   el.pages.className = 'stat';
   el.blanks.textContent = '空白 —';
   el.blanks.className = 'stat';
-  el.downloads.textContent = '';
+  // 内容一变，上一次的生成结果就对不上了，先收起来
+  el.results.textContent = '';
+  el.results.hidden = true;
+  state.lastBuild = null;
+  closeBlankList();
   updateActions();
   state.timer = setTimeout(preview, PREVIEW_DELAY);
 }

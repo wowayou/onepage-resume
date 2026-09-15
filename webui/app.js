@@ -20,7 +20,7 @@ const el = {
   file: document.getElementById('stat-file'),
   badge: document.getElementById('stat-badge'),
   mode: document.getElementById('stat-mode'),
-  downloads: document.getElementById('downloads'),
+  results: document.getElementById('results'),
   toast: document.getElementById('toast'),
   banners: document.getElementById('banners'),
   new: document.getElementById('btn-new'),
@@ -57,6 +57,7 @@ const state = {
   fileRevision: null,
   fileInfo: { name: null, writable: true, reason: '', extends: null },
   savedAt: null,                // 上次保存成功的时间戳
+  lastBuild: null,              // 最近一次生成的结果，结果区读它
   draftTimer: null,
   statTimer: null,
   listSeparator: null,
@@ -153,7 +154,7 @@ el.new.addEventListener('click', newFile);
 el.save.addEventListener('click', saveFile);
 el.saveAs.addEventListener('click', saveAsFile);
 el.history.addEventListener('click', showHistory);
-el.render.addEventListener('click', build);
+el.render.addEventListener('click', showBuildDialog);
 el.theme.addEventListener('change', schedule);
 el.sheet.addEventListener('load', fitPaper);
 el.help.addEventListener('click', showHelp);
