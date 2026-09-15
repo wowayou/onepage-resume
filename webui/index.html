@@ -19,21 +19,27 @@
   </div>
 
   <div class="bar-controls">
+    <!-- 选一个文件就打开它，不再需要"先填名字再点读取" -->
     <label class="control">
-      <span>内容文件</span>
-      <input id="content-name" list="content-list" spellcheck="false"
-             autocomplete="off">
-      <datalist id="content-list"></datalist>
+      <span>文件</span>
+      <select id="file-picker" title="选一份内容文件打开"></select>
     </label>
+
+    <button id="btn-new" type="button" class="ghost">新建</button>
+    <button id="btn-save" type="button" class="ghost" disabled
+            title="写回当前文件（Ctrl-S）">保存</button>
+    <button id="btn-save-as" type="button" class="ghost" disabled
+            title="存成另一个名字">另存为…</button>
+    <button id="btn-history" type="button" class="ghost" disabled
+            title="看这个文件以前存过的版本">历史版本…</button>
 
     <label class="control">
       <span>版式</span>
       <select id="theme-name"></select>
     </label>
 
-    <button id="btn-load" type="button" class="ghost">读取</button>
-    <button id="btn-save" type="button" class="ghost" disabled>保存 TOML</button>
     <button id="btn-render" type="button" class="primary" disabled>生成 PDF</button>
+    <button id="btn-help" type="button" class="icon" title="这个界面怎么用">?</button>
   </div>
 </header>
 
@@ -42,20 +48,25 @@
     <nav id="jump" class="jump" aria-label="跳到某一块"></nav>
     <div id="form" class="form"></div>
     <p class="form-foot">
-      改动只在浏览器里，点<strong>保存 TOML</strong> 才写进文件（覆盖前自动留
-      <code>.bak</code>）。这个页面和 <code>python fill.py</code> 认的是同一份文件。
+      改动只在浏览器里，点<strong>保存</strong>才写进文件；每次覆盖前都会把上一版
+      留在内容目录的 <code>.history/</code> 里。这个页面和 <code>python fill.py</code>
+      认的是同一份文件。
     </p>
   </section>
 
   <section class="pane view-pane" aria-label="预览">
     <div class="status">
       <span id="stat-pages" class="stat">页数 —</span>
-      <span id="stat-blanks" class="stat">空白 —</span>
+      <!-- 点一下列出还差哪些空，再点一条就跳过去 -->
+      <button id="stat-blanks" type="button" class="stat" aria-expanded="false">空白 —</button>
       <span id="stat-mode" class="stat muted"></span>
       <span class="stat-gap"></span>
       <span id="stat-file" class="stat muted"></span>
+      <span id="stat-badge" class="badge"></span>
       <span id="downloads" class="downloads"></span>
     </div>
+
+    <div id="blank-list" class="blank-list" hidden></div>
 
     <!-- 持久横幅的落点：读取 / 保存 / 生成失败时停在这里，直到你关掉它 -->
     <div id="banners" class="banners" role="alert" aria-live="assertive"></div>

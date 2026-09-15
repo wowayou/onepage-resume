@@ -81,8 +81,26 @@ function hintText(field) {
   return bits.join(' · ');
 }
 
-/** 一个空。read/write 把它接到 state.content 上的具体位置。 */
-function fieldView(block, field, read, write) {
+/* 每个输入框按「区块 | 第几条 | 字段」登记一份，好让状态栏那份空白清单能点着
+   跳过去。用一张表而不是给 DOM 加 data-* ：测试里的假 DOM 查不了复杂选择器，
+   而这件事实在没什么好测 DOM 的。 */
+const fieldIndex = new Map();
+
+function fieldKey(block, index, field) {
+  return `${block}|${index === null || index === undefined ? '' : index}|${field}`;
+}
+
+/** 按 schema.find_blank_locations() 给出的位置找回那个输入框。找不到就是 null。 */
+function fieldElement(location) {
+  const index = location.index === undefined ? null : location.index;
+  return fieldIndex.get(fieldKey(location.block, index, location.field)) || null;
+}
+
+/**
+ * 一个空。read/write 把它接到 state.content 上的具体位置。
+ * where 是它在页面上的坐标 {block, index}，只用来登记跳转索引。
+ */
+function fieldView(block, field, read, write, where) {
   const wrap = node('div', 'field');
   const id = `f-${Math.random().toString(36).slice(2, 9)}`;
 
@@ -120,6 +138,8 @@ function fieldView(block, field, read, write) {
     countUp();
     touched();
   });
+
+  if (where) fieldIndex.set(fieldKey(where.block, where.index, field.key), input);
 
   wrap.append(input);
   if (counter) wrap.append(counter);
@@ -175,6 +195,7 @@ function cardView(block, index, rerender) {
       block, field,
       () => rows[index][field.key],
       (value) => { rows[index][field.key] = value; },
+      { block: block.key, index },
     ));
   });
   return card;
@@ -205,6 +226,9 @@ function blockView(block) {
         (value) => {
           state.content[block.section_key] = { title: value };
         },
+        // 栏目标题在 schema 里属于另一张表（section_key），登记时用它，
+        // 空白清单报的也是那个名字。
+        { block: block.section_key, index: null },
       ));
     }
 
@@ -214,6 +238,7 @@ function blockView(block) {
           block, field,
           () => state.content[block.key][field.key],
           (value) => { state.content[block.key][field.key] = value; },
+          { block: block.key, index: null },
         ));
       });
       return;
@@ -243,6 +268,7 @@ function blockView(block) {
 function buildForm() {
   el.form.textContent = '';
   el.jump.textContent = '';
+  fieldIndex.clear();
   state.blocks.forEach((block) => {
     el.form.append(blockView(block));
     const link = node('a', null, block.title);

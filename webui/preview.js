@@ -14,6 +14,8 @@ function touched() {
   state.contentVersion += 1;
   state.dirty = true;
   el.save.classList.add('dirty');
+  updateBadge();                 // 徽标立刻从"已保存"变成"未保存"
+  scheduleDraft();               // 停手一秒后把草稿写进 localStorage
   schedule();
 }
 
@@ -53,7 +55,7 @@ async function preview() {
       : '未安装 pdftoppm，换行仅供参考；页数仍以 PDF 排版为准';
     state.previewReady = true;
     showPages(result.pages);
-    showBlanks(result.blanks);
+    showBlanks(result.blanks, result.locations);
     el.paper.classList.remove('stale');
     fitPaper();
   } catch (error) {
@@ -82,18 +84,69 @@ function showPages(pages) {
   el.pages.className = 'stat bad';
 }
 
-function showBlanks(blanks) {
+function showBlanks(blanks, locations) {
   state.blanks = blanks || [];
-  const count = (blanks || []).length;
+  if (locations) state.blankLocations = locations;
+  const count = state.blanks.length;
   el.blanks.textContent = count ? `空白 ${count} 处` : '空白 0 ✓';
   el.blanks.className = count ? 'stat warn' : 'stat good';
-  el.blanks.title = count ? blanks.join('\n') : '';
+  el.blanks.title = count ? state.blanks.join('\n') : '';
+  if (!count) closeBlankList();
+  else if (state.blanksOpen) renderBlankList();
   updateActions();
 }
 
+/* ---------- 空白清单 ---------- */
+/* 状态栏那句"空白 N 处"是可以点的：点开列出每一处，点一条就跳到那个输入框。
+   只报个数字的话，用户还得自己一行行找。 */
+
+function renderBlankList() {
+  el.blankList.textContent = '';
+  state.blankLocations.forEach((location) => {
+    const item = node('button', 'blank-item', location.message);
+    item.type = 'button';
+    item.addEventListener('click', () => jumpToBlank(location));
+    el.blankList.append(item);
+  });
+  el.blankList.hidden = false;
+}
+
+function closeBlankList() {
+  state.blanksOpen = false;
+  el.blankList.hidden = true;
+  el.blankList.textContent = '';
+  el.blanks.setAttribute('aria-expanded', 'false');
+}
+
+function toggleBlankList() {
+  if (state.blanksOpen) {
+    closeBlankList();
+    return;
+  }
+  if (!state.blankLocations.length) return;
+  state.blanksOpen = true;
+  el.blanks.setAttribute('aria-expanded', 'true');
+  renderBlankList();
+}
+
+function jumpToBlank(location) {
+  const field = fieldElement(location);
+  if (!field) {
+    toast('这一处空在当前表单里找不到对应的输入框。', 'bad');
+    return;
+  }
+  field.scrollIntoView({ block: 'center' });
+  field.focus({ preventScroll: true });
+  field.classList.add('flash');
+  setTimeout(() => field.classList.remove('flash'), 1500);
+}
+
 function updateActions() {
-  el.load.disabled = state.loading || state.saving;
-  el.save.disabled = !state.ready || state.loading || state.saving;
+  const busy = state.loading || state.saving;
+  el.new.disabled = busy;
+  el.save.disabled = !state.ready || busy;
+  el.saveAs.disabled = !state.ready || busy;
+  el.history.disabled = !state.ready || busy || !state.fileName;
   const reason = !state.ready || state.loading ? '先读取一份内容'
     : state.building ? '正在生成 PDF'
       : !state.previewReady ? '等待当前内容预览校验'

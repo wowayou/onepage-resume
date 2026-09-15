@@ -516,3 +516,117 @@ button.dirty::after {
   background: transparent;
   border-color: currentColor;
 }
+
+/* ---------- 状态徽标 ---------- */
+/* 文件名右边那个小方块：未命名 / 未保存 / 已保存 14:20 / 只读：原因。
+   一眼看出"我这份到底存没存进去"。 */
+
+.badge {
+  white-space: nowrap;
+  padding: 1px 7px;
+  font-size: 11px;
+  color: var(--steel);
+  background: var(--shell);
+  border-radius: 999px;
+}
+
+.badge.warn { color: #7A4A12; background: #FBF0E2; }
+
+.badge.ro { color: var(--steel); background: #EEF1F4; }
+
+/* ---------- 空白清单 ---------- */
+
+.blank-list {
+  flex: 0 0 auto;
+  max-height: 176px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  background: #FDF7EE;
+  border-bottom: 1px solid var(--hair);
+}
+
+.blank-item {
+  display: block;
+  width: 100%;
+  margin: 2px 0;
+  padding: 5px 9px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: left;
+  color: var(--warn);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.blank-item:hover {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--hair);
+}
+
+/* 从空白清单跳过去时，闪一下好让人看清落在哪 */
+.flash {
+  animation: flash 1.5s ease-out;
+  border-color: var(--warn) !important;
+}
+
+@keyframes flash {
+  0%, 40% { background: #FBF0E2; }
+  100% { background: var(--paper); }
+}
+
+/* ---------- 对话框里的输入框与历史列表 ---------- */
+
+.dialog-input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+}
+
+.dialog-input:focus {
+  outline: 2px solid var(--seal-soft);
+  border-color: var(--seal);
+}
+
+.history-list {
+  max-height: 260px;
+  margin-top: 12px;
+  overflow-y: auto;
+  border-top: 1px solid var(--hair);
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 2px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.history-time { flex: 1 1 auto; color: var(--ink-2); }
+
+.history-size { flex: 0 0 auto; color: var(--steel); }
+
+/* ---------- 横幅上的按钮 ---------- */
+
+.banner-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.banner-actions button {
+  padding: 3px 9px;
+  font-size: 11.5px;
+  color: inherit;
+  background: transparent;
+  border-color: currentColor;
+}
