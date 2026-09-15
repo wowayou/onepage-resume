@@ -310,9 +310,12 @@ def refuse_derived(path: Path, existing: dict) -> None:
 
 
 def write_out(path: Path, text: str, expected_revision: str | None = None) -> None:
-    backup, _ = content_io.save_content(path, text, expected_revision)
-    if backup:
-        print(dim(f"旧文件已备份到 {backup.name}"))
+    result = content_io.save_content(path, text, expected_revision)
+    if result.unchanged:
+        print(dim("内容没变，没有写盘。"))
+    elif result.snapshot:
+        # 相对路径更好认：.history/content.toml/20260915T101500Z-a1b2c3d4.toml
+        print(dim(f"上一版已存到 {result.snapshot.relative_to(path.parent)}"))
 
 
 def report_blanks(content: dict) -> int:
