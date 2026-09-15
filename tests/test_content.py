@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -122,40 +123,60 @@ class FileTestCase(unittest.TestCase):
 
 
 class AtomicSaveTest(FileTestCase):
-    def test_create_and_backup_are_exact(self):
-        backup, revision = content_io.save_content(self.path, self.text, None)
-        self.assertIsNone(backup)
+    def test_create_then_overwrite_leaves_a_snapshot(self):
+        first = content_io.save_content(self.path, self.text, None)
+        self.assertIsNone(first.snapshot)
+        self.assertFalse(first.unchanged)
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+
         self.content["summary"]["text"] = "修改后的正文"
         modified = fill.dump_toml(self.content)
-        backup, new_revision = content_io.save_content(self.path, modified, revision)
-        self.assertEqual(backup.read_text(encoding="utf-8"), self.text)
+        second = content_io.save_content(self.path, modified, first.revision)
+        self.assertEqual(second.snapshot.read_text(encoding="utf-8"), self.text)
         self.assertEqual(self.path.read_text(encoding="utf-8"), modified)
-        self.assertNotEqual(revision, new_revision)
+        self.assertNotEqual(first.revision, second.revision)
 
     def test_failed_replacement_keeps_old_file(self):
-        _, revision = content_io.save_content(self.path, self.text, None)
-        with mock.patch.object(Path, "replace", side_effect=OSError("disk failure")):
+        first = content_io.save_content(self.path, self.text, None)
+        self.content["summary"]["text"] = "改了"
+        modified = fill.dump_toml(self.content)
+        # 只让"替换主文件"这一步失败：快照那一步要照常成功，
+        # 否则测的就不是"最后一步失败会不会毁掉旧文件"了。
+        real_replace = Path.replace
+
+        def flaky(source, target):
+            if Path(target) == self.path:
+                raise OSError("disk failure")
+            return real_replace(source, target)
+
+        with mock.patch.object(Path, "replace", flaky):
             with self.assertRaises(OSError):
-                content_io.save_content(self.path, self.text, revision)
+                content_io.save_content(self.path, modified, first.revision)
         self.assertEqual(self.path.read_text(encoding="utf-8"), self.text)
-        self.assertEqual(list(self.directory.glob(".*")), [])
+        # 临时文件不许留下（.history 是快照目录，不算残留）
+        leftovers = [item.name for item in self.directory.glob(".*")
+                     if item.name != content_io.HISTORY_DIR]
+        self.assertEqual(leftovers, [])
 
     def test_invalid_toml_never_touches_existing_file(self):
-        _, revision = content_io.save_content(self.path, self.text, None)
+        first = content_io.save_content(self.path, self.text, None)
         with self.assertRaises(ValueError):
-            content_io.save_content(self.path, 'broken = "', revision)
+            content_io.save_content(self.path, 'broken = "', first.revision)
         self.assertEqual(self.path.read_text(encoding="utf-8"), self.text)
-        self.assertFalse(self.path.with_suffix(".toml.bak").exists())
+        self.assertFalse(content_io.history_dir(self.path).exists(),
+                         "内容都没通过校验，不该留下快照")
 
-    def test_backup_symlink_cannot_overwrite_another_file(self):
-        _, revision = content_io.save_content(self.path, self.text, None)
-        target = self.directory / "outside.txt"
-        target.write_text("untouched", encoding="utf-8")
-        self.path.with_suffix(".toml.bak").symlink_to(target)
+    def test_history_directory_symlink_cannot_redirect_the_snapshot(self):
+        """有人把 .history 换成指向别处的符号链接时，快照不能写到那边去。"""
+        first = content_io.save_content(self.path, self.text, None)
+        outside = self.directory / "outside"
+        outside.mkdir()
+        (self.directory / content_io.HISTORY_DIR).mkdir()
+        content_io.history_dir(self.path).symlink_to(outside)
+        self.content["summary"]["text"] = "改了"
         with self.assertRaises(ValueError):
-            content_io.save_content(self.path, self.text, revision)
-        self.assertEqual(target.read_text(), "untouched")
+            content_io.save_content(self.path, fill.dump_toml(self.content), first.revision)
+        self.assertEqual(list(outside.iterdir()), [])
         self.assertEqual(self.path.read_text(encoding="utf-8"), self.text)
 
     def test_broken_existing_file_is_not_reinterpreted_as_empty(self):
@@ -292,3 +313,173 @@ class RenderSafetyTest(FileTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SaveModeTest(FileTestCase):
+    """三种保存方式 × 四种目标状态。
+
+    内容层面的 12 格。第 13–15 格是"目标正好是仓库里那份示例"，
+    那是 webui 的 PROTECTED_CONTENT 管的，见 test_webui 里的同一张表。
+    """
+
+    def variant(self) -> Path:
+        path = self.directory / "content.variant.toml"
+        path.write_text('extends = "content.toml"\n', encoding="utf-8")
+        return path
+
+    def test_save_modes_matrix(self):
+        example = self.text
+        changed = self.text.replace("两年英文网站内容", "改过的一句话")
+
+        # (状态, 目标文件怎么准备, 该用哪个 revision 发出去)
+        states = {
+            "不存在": (lambda: self.path, None),
+            "存在版本对": (lambda: self._fresh(example), "current"),
+            "存在版本不符": (lambda: self._fresh(example), "stale"),
+            "定制版": (self.variant, None),
+        }
+        # (方式, {状态: 期望})；期望是 True（成功）或异常类型
+        expected = {
+            "create": {"不存在": True, "存在版本对": content_io.ExistsError,
+                       "存在版本不符": content_io.ExistsError,
+                       "定制版": content_io.VariantError},
+            "update": {"不存在": content_io.ModifiedError, "存在版本对": True,
+                       "存在版本不符": content_io.ModifiedError,
+                       "定制版": content_io.VariantError},
+            "overwrite": {"不存在": True, "存在版本对": True,
+                          "存在版本不符": True, "定制版": content_io.VariantError},
+        }
+
+        for state, (prepare, revision_kind) in states.items():
+            for mode in ("create", "update", "overwrite"):
+                with self.subTest(state=state, mode=mode):
+                    target = prepare()
+                    if revision_kind == "current":
+                        revision = content_io.revision(target.read_bytes())
+                    elif revision_kind == "stale":
+                        revision = "deadbeef"
+                    else:
+                        revision = None
+                    want = expected[mode][state]
+                    if want is True:
+                        result = content_io.save_content(target, changed, revision, mode=mode)
+                        self.assertEqual(result.path.read_text(encoding="utf-8"), changed)
+                    else:
+                        before = target.read_bytes()
+                        with self.assertRaises(want):
+                            content_io.save_content(target, changed, revision, mode=mode)
+                        self.assertEqual(target.read_bytes(), before, "被拒绝时不该动文件")
+
+    def _fresh(self, text: str) -> Path:
+        path = self.directory / "content.fresh.toml"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_snapshot_is_written_before_overwrite(self):
+        first = content_io.save_content(self.path, self.text, None)
+        changed = self.text.replace("两年英文网站内容", "换一句话")
+        result = content_io.save_content(self.path, changed, first.revision)
+        self.assertIsNotNone(result.snapshot)
+        self.assertEqual(result.snapshot.read_text(encoding="utf-8"), self.text)
+        self.assertEqual(result.snapshot.parent, content_io.history_dir(self.path))
+
+    def test_unchanged_save_writes_nothing(self):
+        first = content_io.save_content(self.path, self.text, None)
+        before = (self.path.stat().st_mtime_ns, self.path.read_bytes())
+        again = content_io.save_content(self.path, self.text, first.revision)
+        self.assertTrue(again.unchanged)
+        self.assertIsNone(again.snapshot)
+        self.assertEqual((self.path.stat().st_mtime_ns, self.path.read_bytes()), before)
+        self.assertEqual(content_io.snapshot_files(self.path), [])
+
+    def test_no_bak_is_written_anymore(self):
+        first = content_io.save_content(self.path, self.text, None)
+        content_io.save_content(self.path, self.text.replace("两年", "仨年"), first.revision)
+        self.assertFalse(self.path.with_suffix(".toml.bak").exists())
+
+    def test_history_is_pruned_to_keep(self):
+        keep = 3
+        revision = None
+        for index in range(6):
+            body = self.text.replace("两年英文网站内容", f"第 {index} 版")
+            result = content_io.save_content(self.path, body, revision, mode=None)
+            revision = result.revision
+        content_io.prune_history(self.path, keep=keep)
+        remaining = content_io.snapshot_files(self.path)
+        self.assertEqual(len(remaining), keep)
+        # 留下的必须是最近的那几份
+        self.assertEqual(remaining, sorted(remaining)[-keep:])
+
+    def test_snapshot_files_are_private(self):
+        first = content_io.save_content(self.path, self.text, None)
+        result = content_io.save_content(
+            self.path, self.text.replace("两年", "仨年"), first.revision)
+        self.assertEqual(result.snapshot.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(content_io.history_dir(self.path).stat().st_mode & 0o777, 0o700)
+        # .history 这一层也必须是 700：否则同机器的其他用户能看到你有哪些内容文件
+        self.assertEqual((self.directory / content_io.HISTORY_DIR).stat().st_mode & 0o777,
+                         0o700)
+
+
+class HistoryTest(FileTestCase):
+    def test_history_id_gate_rejects_traversal(self):
+        content_io.save_content(self.path, self.text, None)
+        for bad in ("../content.toml", "a/b.toml", "..", "", "./x.toml",
+                    "20260101T000000Z-deadbeef.toml.bak", "sub/20260101T000000Z-deadbeef.toml"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    content_io.read_history(self.path, bad)
+
+    def test_a_well_formed_but_absent_id_is_not_found(self):
+        with self.assertRaises(FileNotFoundError):
+            content_io.read_history(self.path, "20260101T000000Z-deadbeef.toml")
+
+    def test_list_history_is_newest_first(self):
+        revision = None
+        for index in range(3):
+            result = content_io.save_content(
+                self.path, self.text.replace("两年", f"{index}年"), revision)
+            revision = result.revision
+        versions = content_io.list_history(self.path)
+        self.assertEqual(len(versions), 2)          # 第一次是新建，没有快照
+        self.assertEqual([v["id"] for v in versions], sorted(v["id"] for v in versions)[::-1])
+        for version in versions:
+            self.assertGreater(version["size"], 0)
+            self.assertGreater(version["time"], 0)
+
+
+class NormalizeNameTest(unittest.TestCase):
+    def test_normalize_content_name_table(self):
+        table = {
+            "acme": "content.acme.toml",
+            "acme.toml": "content.acme.toml",
+            "content.acme": "content.acme.toml",
+            "content.acme.toml": "content.acme.toml",
+            "content": "content.toml",
+            "content.toml": "content.toml",
+            "CONTENT": "content.toml",
+            "Content.Acme.TOML": "content.Acme.toml",
+            "  张三-简历  ": "content.张三-简历.toml",
+            "content.local": "content.local.toml",
+        }
+        for raw, want in table.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(content_io.normalize_content_name(raw), want)
+
+    def test_normalize_rejects_names_the_gate_would_never_accept(self):
+        for bad in ("", "   ", "a/b", "../x", "sub/x", "NUL.toml/x"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                content_io.normalize_content_name(bad)
+        with self.assertRaises(ValueError):
+            content_io.normalize_content_name(None)
+
+    def test_case_insensitive_collision_counts_as_exists(self):
+        directory = Path(tempfile.mkdtemp())
+        try:
+            (directory / "content.Acme.toml").write_text("x = 1", encoding="utf-8")
+            found = content_io.content_exists(directory, "content.acme.toml")
+            self.assertIsNotNone(found, "只差大小写也算已存在，否则 Windows 上会覆盖")
+            self.assertEqual(found.name, "content.Acme.toml")
+            self.assertIsNone(content_io.content_exists(directory, "content.other.toml"))
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)

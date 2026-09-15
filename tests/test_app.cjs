@@ -47,6 +47,7 @@ class Element {
     this.label = '';
     this.style = { setProperty() {} };
     this.attributes = {};
+    this.hidden = false;
     const classes = new Set();
     this.classList = {
       add: (...names) => names.forEach((name) => classes.add(name)),
@@ -73,7 +74,8 @@ class Element {
     return null;
   }
   remove() { this.removed = true; }
-  focus() {}
+  focus() { this.focused = true; this.scrolled = true; }
+  scrollIntoView() { this.scrolled = true; }
   showModal() { this.open = true; }
   close() { this.open = false; }
   addEventListener(type, handler) {
@@ -84,6 +86,17 @@ class Element {
   dispatch(type, event = {}) {
     for (const handler of (this.listeners?.get(type) || [])) handler(event);
   }
+}
+
+/** 一个够用的 localStorage：草稿那套逻辑要有地方读写。 */
+function memoryStorage() {
+  const store = new Map();
+  return {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: (key) => { store.delete(key); },
+    _store: store,
+  };
 }
 
 async function createApp() {
@@ -99,7 +112,7 @@ async function createApp() {
       createElement: (tag) => new Element(tag),
       body: new Element('body'),
     },
-    window: { addEventListener() {} },
+    window: { addEventListener() {}, localStorage: memoryStorage() },
     setTimeout: (callback) => { timers.add(callback); return callback; },
     clearTimeout: (callback) => timers.delete(callback),
     fetch: (url, options = {}) => new Promise((resolve) => {
@@ -127,21 +140,184 @@ async function createApp() {
   const files = ['ui.js', 'form.js', 'preview.js', 'export.js', 'files.js', 'app.js'];
   const sources = files.map((file) => fs.readFileSync(path.join(root, 'webui', file), 'utf8'));
   vm.runInContext(sources.join('\n') + '\nglobalThis.app = {state, el, touched, schedule, '
-    + 'preview, load, save, build, updateActions, dialog, api, fromInput, toInput, '
-    + 'buildForm, emptyContent};', context);
+    + 'preview, build, updateActions, dialog, api, fromInput, toInput, buildForm, '
+    + 'emptyContent, openFile, newFile, saveFile, saveAsFile, showHistory, '
+    + 'fieldElement, toggleBlankList, jumpToBlank, updateBadge, relativeTime, '
+    + 'showBlanks, window};', context);
   requests.shift().reply({
-    ...info, contents: [], protected: [], themes: ['theme.toml'],
+    ...info, files: [], themes: ['theme.toml'],
     default_theme: 'theme.toml', default_content: null,
-    default_content_name: 'content.toml', out_dir: '/tmp/build', png: true,
+    default_content_name: 'content.toml', out_dir: '/tmp/build',
+    content_dir: '/tmp/content', png: true,
   });
   await new Promise((resolve) => setImmediate(resolve));
   return { ...context.app, requests, timers, document: context.document };
+}
+
+/** 让 async 函数里那几层 await 跑完，请求才会真的发出去。 */
+async function flush(rounds = 6) {
+  for (let index = 0; index < rounds; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 function previewResult(overrides = {}) {
   return { html: 'approximate', preview_html: 'current PDF', pages: 1, blanks: [],
     preview_mode: 'pdf', shown_pages: 1, width: 794, height: 1123, ...overrides };
 }
+
+/** 找到最后弹出的那个对话框，按文字点一个按钮。 */
+function clickDialog(app, label) {
+  const box = app.document.body.children.at(-1);
+  const buttons = buttonsIn(box);
+  const button = buttons.find((item) => item.textContent === label);
+  assert.ok(button, `对话框里没有「${label}」：${buttons.map((item) => item.textContent)}`);
+  button.dispatch('click');
+}
+
+/** 服务端读一份内容文件的正常回应。 */
+function contentReply(overrides = {}) {
+  return {
+    name: 'content.toml', content: structuredClone(info.example), blanks: [],
+    locations: [], writable: true, reason: '', extends: null, revision: 'rev-1',
+    ...overrides,
+  };
+}
+
+test('switching files with unsaved edits asks first', async () => {
+  const app = await createApp();
+  app.state.ready = true;
+  app.state.fileName = 'content.toml';
+  app.state.dirty = true;
+
+  const cancelled = app.openFile('content.other.toml');
+  await flush();
+  assert.equal(app.requests.length, 0, '还没问完就不该去读文件');
+  const labels = buttonsIn(app.document.body.children.at(-1)).map((item) => item.textContent);
+  assert.deepEqual(labels, ['取消', '放弃改动', '保存后切换']);
+  clickDialog(app, '取消');
+  await cancelled;
+  assert.equal(app.state.fileName, 'content.toml', '取消就不该换文件');
+  assert.equal(app.requests.length, 0);
+
+  const switched = app.openFile('content.other.toml');
+  await flush();
+  clickDialog(app, '放弃改动');
+  await flush();
+  app.requests.shift().reply(contentReply({ name: 'content.other.toml', revision: 'rev-2' }));
+  await flush(10);
+  assert.equal(app.state.fileName, 'content.other.toml');
+  assert.equal(app.state.dirty, false);
+});
+
+test('untitled save opens save-as instead of inventing a name', async () => {
+  const app = await createApp();
+  assert.equal(app.state.fileName, null);
+  app.touched();
+
+  const pending = app.saveFile();
+  await flush();
+  const box = app.document.body.children.at(-1);
+  assert.equal(box.tagName, 'DIALOG');
+  assert.match(box.children[0].textContent, /另存为/);
+  // 还没起名字：输入框空着，主按钮是禁用的，也没必要去问服务端
+  const input = box.children.find((child) => child.className === 'dialog-input');
+  assert.equal(input.value, '');
+  assert.equal(input.placeholder, 'content.toml');
+  assert.equal(buttonsIn(box).find((item) => item.className === 'primary').disabled, true);
+  clickDialog(app, '取消');
+  await pending;
+  assert.equal(app.state.fileName, null, '取消之后还是未命名');
+});
+
+test('a modified conflict offers reload or save-as, never force', async () => {
+  const app = await createApp();
+  app.state.ready = true;
+  app.state.fileName = 'content.toml';
+  app.state.fileRevision = 'old-revision';
+  app.touched();
+
+  const pending = app.saveFile();
+  await flush();
+  app.requests.shift().reply({
+    error: 'content.toml 在你读取之后被改过', code: 'modified',
+    name: 'content.toml', revision: 'now',
+  }, 409);
+  await pending;
+
+  const banners = app.el.banners.children;
+  assert.equal(banners.length, 1);
+  const actions = banners[0].children.find((child) => child.className === 'banner-actions');
+  const labels = actions.children.map((item) => item.textContent);
+  assert.deepEqual(labels, ['重新读取（丢掉我的改动）', '另存为…']);
+  assert.ok(!labels.some((label) => /强制|直接覆盖/.test(label)),
+    '不许给"强制覆盖"这条路：那会盖掉别人刚写进去的内容');
+  assert.equal(app.state.dirty, true, '冲突之后改动仍然是未保存状态');
+});
+
+test('draft is restored only after the user says so', async () => {
+  const app = await createApp();
+  const draft = structuredClone(info.example);
+  draft.summary.text = '草稿里那一版';
+  app.window.localStorage.setItem('onepage-resume:draft:content.toml', JSON.stringify({
+    content: draft, theme: 'theme.toml', savedRevision: 'rev-1', time: Date.now(),
+  }));
+
+  // 点「丢弃」：留在文件里的那一版
+  const first = app.openFile('content.toml');
+  await flush();
+  app.requests.shift().reply(contentReply());
+  await flush(10);
+  const box = app.document.body.children.at(-1);
+  assert.equal(box.tagName, 'DIALOG');
+  assert.match(box.children[0].textContent, /没保存的改动/);
+  clickDialog(app, '丢弃');
+  await first;
+  assert.equal(app.state.content.summary.text, info.example.summary.text);
+  assert.equal(app.state.dirty, false);
+  assert.equal(app.window.localStorage.getItem('onepage-resume:draft:content.toml'), null,
+    '说了丢弃就该把草稿清掉');
+
+  // 再来一次，这回点「恢复」
+  app.window.localStorage.setItem('onepage-resume:draft:content.toml', JSON.stringify({
+    content: draft, theme: 'theme.toml', savedRevision: 'rev-1', time: Date.now(),
+  }));
+  const second = app.openFile('content.toml', { force: true });
+  await flush();
+  app.requests.shift().reply(contentReply());
+  await flush(10);
+  clickDialog(app, '恢复');
+  await second;
+  assert.equal(app.state.content.summary.text, '草稿里那一版');
+  assert.equal(app.state.dirty, true, '恢复出来的草稿是未保存状态');
+});
+
+test('blank list click focuses the matching input', async () => {
+  const app = await createApp();
+  app.state.content = structuredClone(info.example);
+  app.buildForm();
+
+  const location = {
+    block: 'experiences', index: 1, field: 'bullets', item: null, section: false,
+    message: '[[experiences]] 第 2 条的 bullets —— 你做了什么',
+  };
+  const field = app.fieldElement(location);
+  assert.ok(field, '应当能按位置找回输入框');
+  assert.equal(field.tagName, 'TEXTAREA');
+
+  app.showBlanks([location.message], [location]);
+  assert.equal(app.el.blanks.textContent, '空白 1 处');
+  app.toggleBlankList();
+  assert.equal(app.el.blankList.hidden, false);
+  assert.equal(app.el.blankList.children.length, 1);
+
+  app.el.blankList.children[0].dispatch('click');
+  assert.equal(field.focused, true, '点一条就该跳到那个输入框');
+  assert.equal(field.classList.contains('flash'), true);
+
+  app.toggleBlankList();
+  assert.equal(app.el.blankList.hidden, true, '再点一下收起');
+});
 
 test('Python and browser share every whitespace separator and preserve example arrays', async () => {
   const app = await createApp();
@@ -193,8 +369,8 @@ test('edits during save remain dirty and repeated saves are coalesced', async ()
   app.state.fileName = 'content.toml';
   app.state.fileRevision = 'old-revision';
   app.touched();
-  const pending = app.save();
-  await app.save();
+  const pending = app.saveFile();
+  await app.saveFile();
   assert.equal(app.requests.length, 1);
   const request = app.requests.shift();
   assert.equal(JSON.parse(request.options.body).revision, 'old-revision');
@@ -207,25 +383,51 @@ test('edits during save remain dirty and repeated saves are coalesced', async ()
   assert.equal(app.el.save.classList.contains('dirty'), true);
 });
 
-test('save as never borrows the revision of a different file', async () => {
+test('save-as on an existing name asks before overwriting', async () => {
   const app = await createApp();
-  app.state.fileName = 'content.toml';
-  app.state.fileRevision = 'old-revision';
-  app.el.name.value = 'content.other.toml';
+  app.state.ready = true;
+  app.state.fileName = null;                  // 未命名 → 保存就是另存为
   app.touched();
-  const pending = app.save();
-  const request = app.requests.shift();
-  assert.equal(JSON.parse(request.options.body).revision, null);
-  request.reply({ error: 'already exists' }, 409);
+
+  const pending = app.saveFile();
+  await flush();
+
+  const box = app.document.body.children.at(-1);
+  const input = box.children.find((child) => child.className === 'dialog-input');
+  assert.ok(input, '另存为对话框里应当有一个文件名输入框');
+  input.value = 'acme';
+  input.dispatch('input');
+  // 基座里的 setTimeout 不会自己跑（好几条用例依赖这一点），手动踢一脚防抖
+  app.state.statTimer();
+  await flush();
+
+  const stat = app.requests.shift();
+  assert.match(stat.url, /^\/api\/stat\?kind=content&name=/);
+  assert.match(decodeURIComponent(stat.url), /name=acme/);
+  stat.reply({ name: 'content.acme.toml', exists: true, writable: true, reason: '' });
+  await flush();
+
+  const primary = buttonsIn(box).find((button) => button.className === 'primary');
+  assert.equal(primary.textContent, '覆盖', '目标已存在时主按钮应当说「覆盖」');
+  primary.dispatch('click');
+  await flush();
+
+  const save = app.requests.shift();
+  const body = JSON.parse(save.options.body);
+  assert.equal(body.mode, 'overwrite');
+  assert.equal(body.name, 'content.acme.toml');
+  save.reply({ name: 'content.acme.toml', path: '/tmp/content.acme.toml', revision: 'r2',
+    snapshot: '20260101T000000Z-deadbeef.toml', unchanged: false, blanks: [] });
   await pending;
-  assert.equal(app.state.dirty, true);
-  assert.equal(app.state.fileName, 'content.toml');
+  assert.equal(app.state.fileName, 'content.acme.toml');
+  assert.equal(app.state.dirty, false);
 });
 
 test('loading does not discard edits made while the request was pending', async () => {
   const app = await createApp();
   const original = app.state.content;
-  const pending = app.load('content.other.toml');
+  const pending = app.openFile('content.other.toml');
+  await flush();
   app.touched();
   app.requests.shift().reply({ name: 'content.other.toml', content: {}, revision: 'other' });
   await pending;
@@ -305,7 +507,7 @@ test('dialog resolves with the pressed button, and ESC counts as the cancel butt
   const buttons = buttonsIn(first);
   assert.deepEqual(buttons.map((button) => button.textContent), ['取消', '放弃改动并读取']);
   buttons[1].dispatch('click');
-  assert.equal(await clicked, '放弃改动并读取');
+  assert.equal((await clicked).label, '放弃改动并读取');
   assert.equal(first.removed, true, '关闭后应当从 DOM 里摘掉');
 
   // ESC（<dialog> 的 cancel 事件）= 点那个 kind: 'cancel' 的按钮，不能让 Promise 悬着
@@ -315,7 +517,9 @@ test('dialog resolves with the pressed button, and ESC counts as the cancel butt
   });
   const second = app.document.body.children.at(-1);
   second.dispatch('cancel', { preventDefault() {} });
-  assert.equal(await escaped, '取消');
+  const escapedAnswer = await escaped;
+  assert.equal(escapedAnswer.label, '取消');
+  assert.equal(escapedAnswer.value, null, '没有输入框时 value 应当是 null');
 });
 
 test('every POST carries a JSON content type, or the server refuses it', async () => {
@@ -326,7 +530,7 @@ test('every POST carries a JSON content type, or the server refuses it', async (
   app.state.fileName = 'content.toml';
   app.state.fileRevision = 'revision';
   app.touched();
-  const saving = app.save();
+  const saving = app.saveFile();
   const saveRequest = app.requests.shift();
   assert.equal(saveRequest.options.method, 'POST');
   assert.equal(saveRequest.options.headers['Content-Type'], 'application/json');

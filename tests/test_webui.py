@@ -366,9 +366,8 @@ class HttpTest(ServerTestCase):
         self.assertEqual(
             [b["key"] for b in payload["blocks"]], [b.key for b in schema.BLOCKS]
         )
-        self.assertIn("content.toml", payload["contents"])
+        self.assertIn("content.toml", [item["name"] for item in payload["files"]])
         self.assertIn("theme.toml", payload["themes"])
-        self.assertIn(render.EXAMPLE_CONTENT, payload["protected"])
         self.assertEqual(payload["default_content_name"],
                          content_io.DEFAULT_CONTENT_NAME)
 
@@ -516,29 +515,45 @@ class PreviewApiTest(ServerTestCase):
 
 
 class SaveApiTest(ServerTestCase):
-    def test_saves_and_backs_up(self):
+    def test_saves_and_leaves_a_snapshot(self):
         payload = {"name": "content.acme.toml", "content": example_content()}
         status, first = self.post("/api/save", payload)
         self.assertEqual(status, 200)
-        self.assertIsNone(first["backup"])
+        self.assertIsNone(first["snapshot"])
+        self.assertFalse(first["unchanged"])
         self.assertTrue((self.dir / "content.acme.toml").exists())
 
+        payload["content"]["summary"]["text"] = "换一段话"
         _, second = self.post("/api/save", {**payload, "revision": first["revision"]})
-        self.assertEqual(second["backup"], "content.acme.toml.bak")
+        self.assertTrue(second["snapshot"].endswith(".toml"))
+        # 快照里装的必须是覆盖之前的那一版
+        snapshot = content_io.history_dir(self.dir / "content.acme.toml") / second["snapshot"]
+        with snapshot.open("rb") as stream:
+            self.assertEqual(tomllib.load(stream)["summary"]["text"],
+                             example_content()["summary"]["text"])
 
-    def test_stale_save_is_rejected_without_touching_file_or_backup(self):
+    def test_unchanged_save_says_so_and_writes_nothing(self):
+        payload = {"name": "content.same.toml", "content": example_content()}
+        _, first = self.post("/api/save", payload)
+        _, again = self.post("/api/save", {**payload, "revision": first["revision"]})
+        self.assertTrue(again["unchanged"])
+        self.assertIsNone(again["snapshot"])
+        self.assertEqual(again["revision"], first["revision"])
+
+    def test_stale_save_is_rejected_without_touching_anything(self):
         payload = {"name": "content.conflict.toml", "content": example_content()}
         _, first = self.post("/api/save", payload)
         payload["content"]["summary"]["text"] = "其他窗口的新内容"
         _, second = self.post("/api/save", {**payload, "revision": first["revision"]})
         path = self.dir / payload["name"]
-        backup = path.with_suffix(".toml.bak")
-        before = (path.read_bytes(), backup.read_bytes())
+        before = path.read_bytes()
+        snapshots = content_io.snapshot_files(path)
         for revision in (None, first["revision"]):
             with self.subTest(revision=revision), self.assertRaises(urllib.error.HTTPError) as caught:
                 self.post("/api/save", {**payload, "revision": revision})
             self.assertEqual(caught.exception.code, 409)
-            self.assertEqual((path.read_bytes(), backup.read_bytes()), before)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(content_io.snapshot_files(path), snapshots)
         self.assertNotEqual(first["revision"], second["revision"])
 
     def test_multiline_text_survives_save_and_reload(self):
@@ -636,6 +651,133 @@ class SaveApiTest(ServerTestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.post("/api/save", {"name": "notes.toml",
                                     "content": example_content()})
+        self.assertEqual(caught.exception.code, 400)
+
+
+    def test_bootstrap_lists_files_with_reasons(self):
+        """文件下拉要能一眼看出哪一份不能写、为什么。"""
+        (self.dir / "content.example.toml").write_text(
+            EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
+        (self.dir / "content.derived.toml").write_text(
+            'extends = "content.toml"\n', encoding="utf-8")
+        _, payload = self.json_get("/api/bootstrap")
+        by_name = {item["name"]: item for item in payload["files"]}
+
+        self.assertTrue(by_name["content.toml"]["writable"])
+        self.assertEqual(by_name["content.toml"]["reason"], "")
+
+        self.assertFalse(by_name[render.EXAMPLE_CONTENT]["writable"])
+        self.assertIn("示例", by_name[render.EXAMPLE_CONTENT]["reason"])
+
+        derived = by_name["content.derived.toml"]
+        self.assertFalse(derived["writable"])
+        self.assertEqual(derived["extends"], "content.toml")
+        self.assertIn("定制版", derived["reason"])
+        self.assertIn("content.toml", derived["reason"])
+
+    def test_stat_normalizes_and_reports_existence(self):
+        # 用一个本类里别的用例不会碰到的名字：临时目录是整个类共用的
+        name = "content.statcheck.toml"
+        status, body = self.json_get("/api/stat?kind=content&name="
+                                     + urllib.parse.quote("statcheck"))
+        self.assertEqual(status, 200)
+        self.assertEqual(body["name"], name)
+        self.assertFalse(body["exists"])
+        self.assertTrue(body["writable"])
+
+        with (self.dir / name).open("wb") as stream:
+            stream.write(EXAMPLE.read_bytes())
+        _, body = self.json_get("/api/stat?kind=content&name="
+                                + urllib.parse.quote("statcheck"))
+        self.assertTrue(body["exists"])
+
+        # 只差大小写也算已存在，否则 Windows 上会把覆盖当成新建
+        _, body = self.json_get("/api/stat?kind=content&name="
+                                + urllib.parse.quote("STATCHECK"))
+        self.assertTrue(body["exists"])
+        self.assertEqual(body["name"], name)
+
+        # 示例文件：规范化之后是只读的
+        _, body = self.json_get("/api/stat?kind=content&name="
+                                + urllib.parse.quote("content.example"))
+        self.assertFalse(body["writable"])
+
+        for bad in ("a/b", "..", " ", "sub/x.toml"):
+            with self.assertRaises(urllib.error.HTTPError, msg=f"名字 {bad!r} 该被拒") as caught:
+                self.get("/api/stat?kind=content&name=" + urllib.parse.quote(bad))
+            self.assertEqual(caught.exception.code, 400, f"名字 {bad!r}")
+            self.assertEqual(json.loads(caught.exception.read())["code"], "invalid_name",
+                             f"名字 {bad!r}")
+
+    def test_save_as_existing_returns_exists_then_overwrite_succeeds(self):
+        name = "content.taken.toml"
+        with (self.dir / name).open("wb") as stream:
+            stream.write(EXAMPLE.read_bytes())
+        payload = {"name": name, "content": example_content(), "mode": "create"}
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/save", payload)
+        self.assertEqual(caught.exception.code, 409)
+        self.assertEqual(json.loads(caught.exception.read())["code"], "exists")
+
+        status, body = self.post("/api/save", {**payload, "mode": "overwrite"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["snapshot"], "覆盖也要先留快照")
+
+    def test_save_modes_matrix_protected_column(self):
+        """15 格表里的最后 3 格：目标正好是仓库跟踪的示例。
+
+        不管用哪种保存方式、带不带版本，都必须被挡下——这份是要提交的，
+        真实内容写进去就等于公开了。内容层面的那 12 格见 tests/test_content.py。
+        """
+        (self.dir / "content.example.toml").write_text(
+            EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
+        before = (self.dir / "content.example.toml").read_bytes()
+        for mode in ("create", "update", "overwrite", None):
+            for revision in (None, "deadbeef"):
+                with self.subTest(mode=mode, revision=revision):
+                    with self.assertRaises(urllib.error.HTTPError) as caught:
+                        self.post("/api/save", {
+                            "name": render.EXAMPLE_CONTENT, "content": example_content(),
+                            "mode": mode, "revision": revision,
+                        })
+                    self.assertEqual(caught.exception.code, 403)
+                    self.assertEqual(json.loads(caught.exception.read())["code"], "protected")
+        self.assertEqual((self.dir / "content.example.toml").read_bytes(), before)
+
+    def test_history_endpoints_round_trip(self):
+        payload = {"name": "content.versioned.toml", "content": example_content()}
+        _, first = self.post("/api/save", payload)
+        payload["content"]["summary"]["text"] = "第二版"
+        self.post("/api/save", {**payload, "revision": first["revision"]})
+
+        status, listing = self.json_get(
+            "/api/history?name=" + urllib.parse.quote(payload["name"]))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listing["versions"]), 1)
+        version = listing["versions"][0]
+        self.assertGreater(version["size"], 0)
+
+        status, loaded = self.json_get(
+            "/api/history/read?name=" + urllib.parse.quote(payload["name"])
+            + "&id=" + urllib.parse.quote(version["id"]))
+        self.assertEqual(status, 200)
+        self.assertEqual(loaded["content"]["summary"]["text"],
+                         example_content()["summary"]["text"])
+        self.assertEqual(loaded["blanks"], [])
+
+    def test_history_read_refuses_foreign_ids(self):
+        name = "content.foreign.toml"
+        with (self.dir / name).open("wb") as stream:
+            stream.write(EXAMPLE.read_bytes())
+        for bad in ("../content.toml", "a/b.toml", "", "20260101T000000Z-deadbeef.toml"):
+            with self.subTest(bad=bad), self.assertRaises(urllib.error.HTTPError) as caught:
+                self.get("/api/history/read?name=" + urllib.parse.quote(name)
+                         + "&id=" + urllib.parse.quote(bad))
+            self.assertIn(caught.exception.code, (400, 404))
+
+    def test_history_needs_a_real_content_file(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get("/api/history?name=" + urllib.parse.quote("theme.toml"))
         self.assertEqual(caught.exception.code, 400)
 
 
