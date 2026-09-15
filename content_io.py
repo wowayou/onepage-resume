@@ -303,6 +303,25 @@ def normalize_content_name(raw: str) -> str:
     return result
 
 
+def normalize_output_name(raw: str) -> str:
+    """把用户写的生成物名字收成主干：张三-简历.pdf → 张三-简历。
+
+    生成物是 .pdf / .html / .png 三个同主干的文件，所以这里说的"名字"一律指主干，
+    不指某一个文件。带不带后缀都收，好让人直接粘一个文件名进来。
+    """
+    if not isinstance(raw, str):
+        raise InvalidNameError(f"文件名不合法：{raw!r}")
+    name = unicodedata.normalize("NFC", raw).strip()
+    lowered = name.casefold()
+    for suffix in (".pdf", ".html", ".png"):
+        if lowered.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    if not name:
+        raise InvalidNameError("文件名不能为空。")
+    return plain_name(name)
+
+
 def content_exists(base: Path, name: str) -> Path | None:
     """按大小写不敏感找同名文件。
 

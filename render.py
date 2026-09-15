@@ -43,6 +43,13 @@ DEFAULT_OUT_DIR = HERE / "build"
 
 PAPER_SIZES = {"A4": ("210mm", "297mm"), "Letter": ("8.5in", "11in")}
 
+# 一次生成会写出的三种文件。它们共用同一个主干名，改名时也必须一起动——
+# 只避开 .pdf 的话会得到"新 PDF 配旧 PNG"，这种更难发现。
+OUTPUT_KINDS = ("html", "pdf", "png")
+
+# 自动改名时最多试到第几号。到不了就报错让人去清理，别无声地转下去。
+RENAME_LIMIT = 1000
+
 # 判断一个字体家族名是不是中文字体。够用就行——只是为了在字体栈里挑出
 # 该由谁承担中文字形，不是要做字体分类。
 CJK_MARKERS = ("CJK", "Han", "YaHei", "SimSun", "SimHei", "PingFang", "Heiti", "Song", "Ming")
@@ -370,6 +377,39 @@ def render_png(pdf_path: Path, png_path: Path) -> bool:
     return True
 
 
+class OutputExistsError(RuntimeError):
+    """同名生成物已经存在，而调用方要求"存在就报错"。
+
+    带着 suggested（自动改名会得到的名字），好让网页的对话框直接把两个选项摆出来。
+    """
+
+    def __init__(self, name: str, suggested: str):
+        super().__init__(f"{name} 已存在。")
+        self.name = name
+        self.suggested = suggested
+
+
+def output_paths(out_dir: Path, basename: str) -> dict[str, Path]:
+    return {kind: out_dir / f"{basename}.{kind}" for kind in OUTPUT_KINDS}
+
+
+def existing_outputs(out_dir: Path, basename: str) -> list[Path]:
+    """这个主干上已经躺着哪些生成物。目录不存在就当没有。"""
+    try:
+        return [path for path in output_paths(out_dir, basename).values() if path.is_file()]
+    except OSError:
+        return []
+
+
+def next_free_basename(out_dir: Path, basename: str) -> str:
+    """找一个三种后缀都还空着的主干：<名>-2 / -3 / …"""
+    for index in range(2, RENAME_LIMIT):
+        candidate = f"{basename}-{index}"
+        if not existing_outputs(out_dir, candidate):
+            return candidate
+    raise ValueError(f"生成物目录里 {basename}-* 太多了，先清理一下再生成。")
+
+
 def build_stylesheet(theme: dict, css_path: Path) -> str:
     """theme.toml 摊平出来的 CSS 变量 + 版式 CSS，拼成一份完整样式表。"""
     return build_root_css(theme) + "\n" + css_path.read_text(encoding="utf-8")
@@ -382,16 +422,33 @@ def resolve_basename(explicit: str | None, content: dict) -> str:
 
 
 def write_outputs(content: dict, theme: dict, stylesheet: str,
-                  out_dir: Path, basename: str) -> dict[str, Path | None]:
+                  out_dir: Path, basename: str,
+                  if_exists: str = "overwrite") -> dict[str, Path | None]:
     """写出 HTML / PDF / PNG，返回各自路径；缺 pdftoppm 时 PNG 是 None。
+
+    if_exists 三种：
+        overwrite  同名就覆盖（命令行默认，等于从前的行为）
+        rename     同名就换成 <名>-2 / -3 …（三种后缀一起避开）
+        fail       同名就报错，让调用方去问用户
 
     "生成物有哪些、叫什么名字"只在这里说一次——命令行和 webui.py 都走这个函数。
     分开写迟早会出现"网页上下载到的和命令行生成的不是同一份东西"。
     """
+    if if_exists not in ("overwrite", "rename", "fail"):
+        raise ValueError(f"未知的重名处理方式：{if_exists!r}")
     basename = plain_name(basename)
     schema.validate_types(content)
     out_dir.mkdir(parents=True, exist_ok=True)
-    paths = {kind: out_dir / f"{basename}.{kind}" for kind in ("html", "pdf", "png")}
+
+    if if_exists != "overwrite" and existing_outputs(out_dir, basename):
+        if if_exists == "fail":
+            raise OutputExistsError(
+                f"{basename}.pdf",
+                f"{next_free_basename(out_dir, basename)}.pdf",
+            )
+        basename = next_free_basename(out_dir, basename)
+
+    paths = output_paths(out_dir, basename)
     for path in paths.values():
         if path.is_symlink() or (path.exists() and not path.is_file()):
             raise ValueError(f"生成物目标不是普通文件：{path.name}")
@@ -443,6 +500,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--name", metavar="BASENAME",
                         help="生成物的文件名主干，默认取 [document] output_basename，"
                              "再默认 resume。")
+    parser.add_argument("--if-exists", choices=("overwrite", "rename", "fail"),
+                        default="overwrite",
+                        help="生成物同名时怎么办，默认 overwrite（直接覆盖）。"
+                             "rename 会自动改成 <名>-2；fail 直接报错，不改任何文件。")
     return parser.parse_args(argv)
 
 
@@ -460,7 +521,8 @@ def run(argv: list[str] | None = None) -> None:
     basename = resolve_basename(args.name, content)
     stylesheet = build_stylesheet(theme, css_path)
     check_fonts(theme)
-    outputs = write_outputs(content, theme, stylesheet, out_dir, basename)
+    outputs = write_outputs(content, theme, stylesheet, out_dir, basename,
+                            if_exists=args.if_exists)
 
     if content_path.name == EXAMPLE_CONTENT:
         print(f"内容: {content_path}（虚构示例；你自己的那份请写进 content.toml"
@@ -476,6 +538,12 @@ def run(argv: list[str] | None = None) -> None:
 def main(argv: list[str] | None = None) -> None:
     try:
         run(argv)
+    except OutputExistsError as error:
+        raise SystemExit(
+            f"错误：{error}\n"
+            f"    想自动改名：--if-exists rename（这一次会写成 {error.suggested}）\n"
+            f"    想覆盖它：  --if-exists overwrite（默认行为）"
+        ) from error
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         raise SystemExit(f"错误：{error}") from error
 

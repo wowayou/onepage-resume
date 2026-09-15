@@ -305,6 +305,54 @@ class RenderSafetyTest(FileTestCase):
         for kind in ("html", "pdf", "png"):
             self.assertEqual((self.directory / f"resume.{kind}").read_bytes(), b"previous")
 
+    def test_if_exists_fail_refuses_when_any_suffix_exists(self):
+        for kind in ("html", "pdf", "png"):
+            (self.directory / f"resume.{kind}").write_bytes(b"previous")
+        with self.assertRaises(render.OutputExistsError) as caught:
+            render.write_outputs(self.content, self.theme, self.stylesheet,
+                                 self.directory, "resume", if_exists="fail")
+        self.assertEqual(caught.exception.suggested, "resume-2.pdf")
+        for kind in ("html", "pdf", "png"):
+            self.assertEqual((self.directory / f"resume.{kind}").read_bytes(), b"previous")
+
+    def test_if_exists_rename_picks_next_free_across_suffixes(self):
+        # 只占着 .png：仍然要跳过这一号，否则会写出"新 PDF 配旧 PNG"
+        (self.directory / "resume.png").write_bytes(b"previous")
+        outputs = render.write_outputs(self.content, self.theme, self.stylesheet,
+                                       self.directory, "resume", if_exists="rename")
+        self.assertEqual(outputs["pdf"].name, "resume-2.pdf")
+        self.assertEqual(outputs["html"].name, "resume-2.html")
+        self.assertEqual((self.directory / "resume.png").read_bytes(), b"previous")
+
+        (self.directory / "resume-2.html").write_bytes(b"previous")
+        again = render.write_outputs(self.content, self.theme, self.stylesheet,
+                                     self.directory, "resume", if_exists="rename")
+        self.assertEqual(again["pdf"].name, "resume-3.pdf")
+
+    def test_next_free_basename_starts_at_two(self):
+        self.assertEqual(render.next_free_basename(self.directory, "never-used"), "never-used-2")
+
+    def test_if_exists_overwrite_is_the_cli_default(self):
+        self.assertEqual(render.parse_args([]).if_exists, "overwrite")
+        self.assertEqual(render.parse_args(["--if-exists", "rename"]).if_exists, "rename")
+        with self.assertRaises(SystemExit):
+            render.parse_args(["--if-exists", "whatever"])
+
+    def test_cli_renders_twice_and_fail_mode_exits_cleanly(self):
+        out = self.directory / "cli-out"
+        base = [sys.executable, str(ROOT / "render.py"),
+                "--content", str(ROOT / "content.example.toml"),
+                "--out-dir", str(out), "--name", "cli-test"]
+        first = subprocess.run(base, capture_output=True, text=True, timeout=180)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = subprocess.run(base, capture_output=True, text=True, timeout=180)
+        self.assertEqual(second.returncode, 0, "默认应当覆盖，不该报错")
+        third = subprocess.run([*base, "--if-exists", "fail"],
+                               capture_output=True, text=True, timeout=180)
+        self.assertNotEqual(third.returncode, 0)
+        self.assertNotIn("Traceback", third.stderr + third.stdout)
+        self.assertIn("--if-exists", third.stderr + third.stdout)
+
     def test_cli_and_browser_reject_path_like_basenames(self):
         for name in ("../escape", "/tmp/escape", "C:\\escape", "a/b"):
             with self.subTest(name=name), self.assertRaises(ValueError):
