@@ -831,6 +831,132 @@ class RenderApiTest(ServerTestCase):
         _, _, headers = self.get("/api/artifact?name=" + urllib.parse.quote(files["pdf"]))
         self.assertTrue(headers["Content-Disposition"].startswith("attachment"))
 
+    def test_render_defaults_to_fail_and_suggests_a_name(self):
+        payload = {"content": example_content(), "basename": "重名-简历"}
+        status, first = self.post("/api/render", payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(first["basename"], "重名-简历")
+
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/render", payload)
+        self.assertEqual(caught.exception.code, 409)
+        body = json.loads(caught.exception.read())
+        self.assertEqual(body["code"], "exists")
+        self.assertEqual(body["name"], "重名-简历.pdf")
+        self.assertEqual(body["suggested"], "重名-简历-2.pdf")
+        # 被拒绝时不能动已有的那份
+        self.assertTrue((self.dir / "build" / "重名-简历.pdf").exists())
+
+    def test_render_rename_reports_actual_basename(self):
+        payload = {"content": example_content(), "basename": "改名-简历"}
+        self.post("/api/render", payload)
+        _, renamed = self.post("/api/render", {**payload, "if_exists": "rename"})
+        self.assertEqual(renamed["basename"], "改名-简历-2")
+        self.assertEqual(renamed["files"]["pdf"], "改名-简历-2.pdf")
+        self.assertTrue((self.dir / "build" / "改名-简历.pdf").exists())
+
+    def test_render_overwrite_replaces_in_place(self):
+        payload = {"content": example_content(), "basename": "覆盖-简历"}
+        self.post("/api/render", payload)
+        before = (self.dir / "build" / "覆盖-简历.pdf").stat().st_mtime_ns
+        _, again = self.post("/api/render", {**payload, "if_exists": "overwrite"})
+        self.assertEqual(again["basename"], "覆盖-简历")
+        self.assertNotEqual(
+            (self.dir / "build" / "覆盖-简历.pdf").stat().st_mtime_ns, before)
+
+    def test_render_refuses_an_unknown_policy(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/render", {"content": example_content(), "if_exists": "随便"})
+        self.assertEqual(caught.exception.code, 400)
+
+    def test_artifact_stat_reports_conflict_and_suggestion(self):
+        self.post("/api/render", {"content": example_content(), "basename": "问名-简历"})
+        _, body = self.json_get("/api/stat?kind=artifact&name="
+                                + urllib.parse.quote("问名-简历.pdf"))
+        self.assertEqual(body["name"], "问名-简历")
+        self.assertTrue(body["exists"])
+        self.assertEqual(body["suggested"], "问名-简历-2")
+
+        _, fresh = self.json_get("/api/stat?kind=artifact&name="
+                                 + urllib.parse.quote("没用过的名字"))
+        self.assertFalse(fresh["exists"])
+
+    def test_artifacts_listing_only_shows_artifacts(self):
+        self.post("/api/render", {"content": example_content(), "basename": "清单-简历"})
+        (self.dir / "build" / "notes.txt").write_text("x", encoding="utf-8")
+        (self.dir / "build" / "sub").mkdir(exist_ok=True)
+        status, body = self.json_get("/api/artifacts")
+        self.assertEqual(status, 200)
+        names = [item["name"] for item in body["files"]]
+        self.assertIn("清单-简历.pdf", names)
+        self.assertIn("清单-简历.png", names)
+        self.assertIn("清单-简历.html", names)
+        self.assertNotIn("notes.txt", names)
+        self.assertNotIn("sub", names)
+        for item in body["files"]:
+            self.assertIn(item["kind"], ("pdf", "png", "html"))
+            self.assertGreater(item["size"], 0)
+
+    def test_reveal_uses_explorer_in_wsl(self):
+        target = self.dir / "build" / "reveal-简历.pdf"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4")
+        queries, launched = [], []
+
+        def which(name):
+            return f"/usr/bin/{name}" if name in ("explorer.exe", "wslpath") else None
+
+        def run(argv, **kwargs):
+            queries.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="C:\\tmp\\reveal.pdf\n")
+
+        with mock.patch.object(webui, "_in_wsl", return_value=True), \
+             mock.patch.object(webui.shutil, "which", which), \
+             mock.patch.object(webui.subprocess, "run", run), \
+             mock.patch.object(webui.subprocess, "Popen",
+                               lambda argv, **kwargs: launched.append(argv)):
+            status, body = self.post("/api/reveal", {"name": target.name})
+        self.assertEqual(status, 200)
+        self.assertEqual(queries, [["wslpath", "-w", str(target)]])
+        self.assertEqual(launched, [["explorer.exe", "/select,C:\\tmp\\reveal.pdf"]])
+        # 不看退出码：explorer.exe 成功也常常返回 1。上面的 run 返回 0，
+        # Popen 干脆没有返回值——两者都不影响这次请求成功，正是要的行为。
+
+    def test_reveal_uses_xdg_open_on_a_plain_linux_desktop(self):
+        target = self.dir / "build" / "reveal-linux.pdf"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4")
+        launched = []
+        with mock.patch.object(webui, "_in_wsl", return_value=False), \
+             mock.patch.object(webui.sys, "platform", "linux"), \
+             mock.patch.object(webui.shutil, "which",
+                               lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None), \
+             mock.patch.object(webui.subprocess, "Popen",
+                               lambda argv, **kwargs: launched.append(argv)):
+            status, _ = self.post("/api/reveal", {"name": target.name})
+        self.assertEqual(status, 200)
+        self.assertEqual(launched, [["xdg-open", str(target.parent)]])
+
+    def test_reveal_reports_unsupported_without_tools(self):
+        target = self.dir / "build" / "reveal-none.pdf"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4")
+        with mock.patch.object(webui, "_in_wsl", return_value=False), \
+             mock.patch.object(webui.sys, "platform", "linux"), \
+             mock.patch.object(webui.shutil, "which", lambda name: None):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.post("/api/reveal", {"name": target.name})
+        self.assertEqual(caught.exception.code, 501)
+        body = json.loads(caught.exception.read())
+        self.assertEqual(body["code"], "unsupported")
+        self.assertIn(str(target), body["error"])
+
+    def test_reveal_refuses_names_outside_out_dir(self):
+        for bad in ("../render.py", "/etc/passwd", "sub/x.pdf", "notes.txt", ".."):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.post("/api/reveal", {"name": bad})
+            self.assertIn(caught.exception.code, (400, 404), bad)
+
     def test_artifact_refuses_traversal_and_other_suffixes(self):
         for bad in ("../render.py", "/etc/passwd", "resume.toml"):
             with self.subTest(bad=bad):

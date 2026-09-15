@@ -162,6 +162,33 @@ def for_preview(content: dict) -> dict:
 
 # ---------- 路径闸门 ----------
 
+def reveal_argv(path: Path) -> list[str] | None:
+    """在文件管理器里选中这个文件要跑什么命令；这个环境做不到就返回 None。
+
+    WSL 里交给 Windows 的 explorer.exe，因为这个发行版可能根本没有桌面环境。
+    """
+    if _in_wsl():
+        if not shutil.which("explorer.exe"):
+            return None
+        windows = _windows_path(path)
+        return ["explorer.exe", f"/select,{windows}"] if windows else None
+    if sys.platform == "darwin":
+        return ["open", "-R", str(path)] if shutil.which("open") else None
+    if shutil.which("xdg-open"):
+        return ["xdg-open", str(path.parent)]
+    return None
+
+
+def _windows_path(path: Path) -> str | None:
+    """Linux 路径转成 Windows 路径——explorer.exe 只认后者。"""
+    if not shutil.which("wslpath"):
+        return None
+    result = subprocess.run(["wslpath", "-w", str(path)],
+                            capture_output=True, text=True, check=False)
+    windows = result.stdout.strip()
+    return windows if result.returncode == 0 and windows else None
+
+
 def content_file_info(content_dir: Path, name: str) -> dict:
     """一个内容文件能不能写、为什么。
 
@@ -263,15 +290,18 @@ class Studio:
             })
         return result
 
-    def build(self, content: dict, theme_name: str | None, basename: str) -> dict:
+    def build(self, content: dict, theme_name: str | None, basename: str,
+              if_exists: str = "fail") -> dict:
         theme = self.theme(theme_name)
         stylesheet = render.build_stylesheet(theme, self.css_path)
         with PREVIEW_LOCK:
             outputs = render.write_outputs(
-                content, theme, stylesheet, self.out_dir, basename
+                content, theme, stylesheet, self.out_dir, basename, if_exists=if_exists
             )
         return {
             "out_dir": str(self.out_dir),
+            # 实际用的是哪个主干：自动改名之后可能和请求的那个不一样
+            "basename": outputs["pdf"].stem,
             "files": {
                 kind: (path.name if path else None) for kind, path in outputs.items()
             },
@@ -419,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.read_content(query)
                 elif path == "/api/stat":
                     self.stat(query)
+                elif path == "/api/artifacts":
+                    self.artifacts()
                 elif path == "/api/history":
                     self.history(query)
                 elif path == "/api/history/read":
@@ -437,6 +469,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.do_save()
             elif path == "/api/render":
                 self.do_render()
+            elif path == "/api/reveal":
+                self.do_reveal()
             else:
                 self.fail(HTTPStatus.NOT_FOUND, "没有这个地址。")
         # 顺序有讲究：子类必须排在父类前面，否则会被父类先接走。
@@ -528,10 +562,21 @@ class Handler(BaseHTTPRequestHandler):
         前端不复制一份"content 前缀怎么补"的逻辑，两边不一致时最难查。
         """
         kind = (query.get("kind") or ["content"])[0]
+        raw = (query.get("name") or [""])[0]
+        if kind == "artifact":
+            # 生成物：名字指主干，不指某一个文件
+            name = content_io.normalize_output_name(raw)
+            taken = render.existing_outputs(self.studio.out_dir, name)
+            self.send_json({
+                "name": name,
+                "exists": bool(taken),
+                "conflict": taken[0].name if taken else None,
+                "suggested": render.next_free_basename(self.studio.out_dir, name),
+            })
+            return
         if kind != "content":
             raise ApiError(HTTPStatus.BAD_REQUEST, "bad_request",
                            f"不认识的 kind：{kind!r}")
-        raw = (query.get("name") or [""])[0]
         name = content_io.normalize_content_name(raw)
         existing = content_io.content_exists(self.studio.content_dir, name)
         if existing is None:
@@ -541,6 +586,30 @@ class Handler(BaseHTTPRequestHandler):
         # 磁盘上的文件名大小写可能和用户写的不同，以磁盘上的为准。
         self.send_json({**content_file_info(self.studio.content_dir, existing.name),
                         "exists": True})
+
+    def artifacts(self) -> None:
+        """生成物目录里有哪些东西。生成对话框和结果区都用它。"""
+        out_dir = self.studio.out_dir
+        files = []
+        for path in sorted(out_dir.glob("*")) if out_dir.is_dir() else []:
+            try:
+                safe_name(path.name, "*", out_dir)
+            except ValueError:
+                continue        # 符号链接之类，不列出来
+            if path.suffix not in ARTIFACT_TYPES or not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append({
+                "name": path.name,
+                "kind": path.suffix.lstrip("."),
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+            })
+        files.sort(key=lambda item: item["mtime"], reverse=True)
+        self.send_json({"out_dir": str(out_dir), "files": files})
 
     def history(self, query: dict) -> None:
         name = (query.get("name") or [""])[0]
@@ -645,12 +714,41 @@ class Handler(BaseHTTPRequestHandler):
             )
 
         basename = safe_basename(render.resolve_basename(payload.get("basename"), content))
+        # 网页默认"撞名就问"，和命令行的默认覆盖相反：这里多问一句几乎没成本，
+        # 而无声覆盖掉上一次的生成物是不可逆的。
+        if_exists = payload.get("if_exists") or "fail"
+        if if_exists not in ("overwrite", "rename", "fail"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "bad_request",
+                           f"未知的重名处理方式：{if_exists!r}")
         try:
-            result = self.studio.build(content, payload.get("theme"), basename)
+            result = self.studio.build(content, payload.get("theme"), basename,
+                                       if_exists=if_exists)
         except render.PageOverflow as error:    # 超过一页
             raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "overflow",
                            str(error), pages=error.pages) from error
+        except render.OutputExistsError as error:
+            raise ApiError(HTTPStatus.CONFLICT, "exists", str(error),
+                           name=error.name, suggested=error.suggested) from error
         self.send_json(result)
+
+    def do_reveal(self) -> None:
+        """在文件管理器里选中一个生成物。"""
+        payload = self.body_json()
+        name = payload.get("name") or ""
+        if Path(name).suffix not in ARTIFACT_TYPES:
+            raise ValueError(f"只提供 {' / '.join(ARTIFACT_TYPES)}：{name!r}")
+        path = safe_name(name, "*", self.studio.out_dir)
+        if not path.is_file():
+            raise FileNotFoundError(f"生成物不存在：{name}")
+        argv = reveal_argv(path)
+        if argv is None:
+            raise ApiError(
+                HTTPStatus.NOT_IMPLEMENTED, "unsupported",
+                f"这个环境里没有能打开文件管理器的命令。文件在：{path}")
+        # explorer.exe 打开成功也常常返回 1，所以这里不看退出码；也不等它——
+        # 那是个 GUI 进程，等下去会把请求挂住。
+        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.send_json({"path": str(path)})
 
 
 def disposition(name: str, inline: bool = False) -> str:
