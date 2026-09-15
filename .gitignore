@@ -13,6 +13,9 @@ content*.toml
 # 你的姓名 / 域名 / 雇主名，一行一个。check-privacy.sh 读它，Git 不碰它。
 .identifiers
 
+# ---- 每次覆盖前留的历史快照：内容和主文件一样，同样是真实信息 ----
+.history/
+
 # ---- 生成物：PDF 里的手机号是能被直接搜出来的 ----
 build/
 # make dist 打出来的可分发包（.gitignore 里的内容文件本就不会进包）

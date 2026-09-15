@@ -162,6 +162,26 @@ def for_preview(content: dict) -> dict:
 
 # ---------- 路径闸门 ----------
 
+def content_file_info(content_dir: Path, name: str) -> dict:
+    """一个内容文件能不能写、为什么。
+
+    文件下拉、状态栏徽标、另存为对话框全都读这一份，别处不许自己判——
+    "为什么只读"这句话在三个地方必须说得一模一样。
+    """
+    info = {"name": name, "writable": True, "reason": "", "extends": None}
+    if name in PROTECTED_CONTENT:
+        return {**info, "writable": False, "reason": "仓库里跟踪的示例"}
+    try:
+        raw, _ = content_io.read_snapshot(content_dir / name)
+    except (OSError, ValueError) as error:
+        return {**info, "writable": False, "reason": f"读不了（{error}）"}
+    parent = raw.get("extends")
+    if parent:
+        return {**info, "writable": False, "extends": parent,
+                "reason": f"定制版，继承 {parent}"}
+    return info
+
+
 def current_revision(path: Path) -> str | None:
     """磁盘上那个文件此刻的版本号；不存在就是 None。给"被别的窗口改过"提示用。"""
     try:
@@ -397,6 +417,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.bootstrap()
                 elif path == "/api/content":
                     self.read_content(query)
+                elif path == "/api/stat":
+                    self.stat(query)
+                elif path == "/api/history":
+                    self.history(query)
+                elif path == "/api/history/read":
+                    self.history_read(query)
                 elif path == "/api/artifact":
                     self.artifact(query)
                 elif path.startswith("/static/"):
@@ -451,16 +477,15 @@ class Handler(BaseHTTPRequestHandler):
     def bootstrap(self) -> None:
         """网页启动时要的一切：字段表、可选的内容文件与版式、目录位置。"""
         studio = self.studio
-        files = listing(studio.content_dir, CONTENT_GLOB)
+        names = listing(studio.content_dir, CONTENT_GLOB)
         default = next(
-            (name for name in render.CONTENT_CANDIDATES if name in files),
-            files[0] if files else None,
+            (name for name in render.CONTENT_CANDIDATES if name in names),
+            names[0] if names else None,
         )
         self.send_json({
             "blocks": schema.describe(),
             "input_rules": schema.input_rules(),
-            "contents": files,
-            "protected": sorted(PROTECTED_CONTENT),
+            "files": [content_file_info(studio.content_dir, name) for name in names],
             "default_content": default,
             "default_content_name": content_io.DEFAULT_CONTENT_NAME,
             "themes": listing(HERE, THEME_GLOB),
@@ -484,13 +509,55 @@ class Handler(BaseHTTPRequestHandler):
         derives_from = raw.get("extends")
         content = render.load_content(path, allowed_dir=self.studio.content_dir)
 
+        info = content_file_info(self.studio.content_dir, path.name)
         self.send_json({
             "name": path.name,
             "content": shape(content),
             "blanks": schema.find_blanks(content),
-            "writable": path.name not in PROTECTED_CONTENT and not derives_from,
+            "locations": schema.find_blank_locations(content),
+            "writable": info["writable"],
+            "reason": info["reason"],
             "extends": derives_from,
             "revision": revision,
+        })
+
+    def stat(self, query: dict) -> None:
+        """问一个名字：收成什么样、在不在、能不能写。
+
+        另存为对话框每敲几个字就问一次，所以规则只在这里实现一遍——
+        前端不复制一份"content 前缀怎么补"的逻辑，两边不一致时最难查。
+        """
+        kind = (query.get("kind") or ["content"])[0]
+        if kind != "content":
+            raise ApiError(HTTPStatus.BAD_REQUEST, "bad_request",
+                           f"不认识的 kind：{kind!r}")
+        raw = (query.get("name") or [""])[0]
+        name = content_io.normalize_content_name(raw)
+        existing = content_io.content_exists(self.studio.content_dir, name)
+        if existing is None:
+            self.send_json({"name": name, "exists": False, "writable": True,
+                            "reason": "", "extends": None})
+            return
+        # 磁盘上的文件名大小写可能和用户写的不同，以磁盘上的为准。
+        self.send_json({**content_file_info(self.studio.content_dir, existing.name),
+                        "exists": True})
+
+    def history(self, query: dict) -> None:
+        name = (query.get("name") or [""])[0]
+        path = safe_name(name, CONTENT_GLOB, self.studio.content_dir)
+        self.send_json({"name": path.name, "versions": content_io.list_history(path)})
+
+    def history_read(self, query: dict) -> None:
+        name = (query.get("name") or [""])[0]
+        snapshot_id = (query.get("id") or [""])[0]
+        path = safe_name(name, CONTENT_GLOB, self.studio.content_dir)
+        content = content_io.parse_content(
+            content_io.read_history(path, snapshot_id), f"{name} 的历史版本")
+        self.send_json({
+            "name": path.name,
+            "id": snapshot_id,
+            "content": shape(content),
+            "blanks": schema.find_blanks(content),
         })
 
     def artifact(self, query: dict) -> None:
@@ -514,6 +581,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({
             **preview,
             "blanks": schema.find_blanks(content),
+            # 结构化的位置：状态栏那份空白清单点一下就跳到对应输入框
+            "locations": schema.find_blank_locations(content),
         })
 
     def do_save(self) -> None:
@@ -532,13 +601,17 @@ class Handler(BaseHTTPRequestHandler):
         expected_revision = payload.get("revision")
         if expected_revision is not None and not isinstance(expected_revision, str):
             raise ValueError("文件版本必须是字符串。")
+        mode = payload.get("mode")
+        if mode is not None and mode not in ("create", "update", "overwrite"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "bad_request",
+                           f"未知的保存方式：{mode!r}")
         with self.studio.save_lock:
             # 定制版不许整份重写、已有文件必须先读到同一版本，都由 save_content 一处把关。
             # 这里把它的三种拒绝翻译成带 code 的 API 错误：前端要据此决定下一步
             # （撞名 → 问是否覆盖；被改过 → 提示重新读取；定制版 → 引导另存为）。
             try:
-                backup, revision = content_io.save_content(
-                    path, fill.dump_toml(content), expected_revision)
+                result = content_io.save_content(
+                    path, fill.dump_toml(content), expected_revision, mode=mode)
             except content_io.ExistsError as error:
                 raise ApiError(HTTPStatus.CONFLICT, "exists", str(error),
                                name=path.name) from error
@@ -549,10 +622,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(HTTPStatus.FORBIDDEN, "variant", str(error),
                                name=path.name) from error
         self.send_json({
-            "path": str(path),
-            "name": path.name,
-            "backup": backup.name if backup else None,
-            "revision": revision,
+            "path": str(result.path),
+            "name": result.path.name,
+            "revision": result.revision,
+            "snapshot": result.snapshot.name if result.snapshot else None,
+            "unchanged": result.unchanged,
             "blanks": schema.find_blanks(content),
         })
 
