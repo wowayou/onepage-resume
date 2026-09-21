@@ -285,6 +285,42 @@ class ResumeBuilder:
         items = " · ".join(esc(item) for item in self.content["education"]["items"])
         return f'<p class="education">{items}</p>'
 
+    def custom_block(self, block, rows: list) -> str:
+        """自定义板块的通用版面：每条一个 .entry，字段按声明顺序渲染。
+        没有内建块那种手调版面，复用经历/项目的 .entry 语言——第一个 text
+        字段当标题，list 当面包屑，lines 当 bullet，其余 text 当正文段落。
+        用户接受"可能不好看"，换来的是全自定义字段。"""
+        entries = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parts = []
+            title_done = False
+            for field in block.fields:
+                value = row.get(field.key)
+                if field.kind == "list":
+                    items = [v for v in (value or []) if str(v).strip()]
+                    if items:
+                        parts.append(
+                            f'<p class="entry-meta">{self.crumbs(items)}</p>')
+                elif field.kind == "lines":
+                    bullets = "".join(
+                        f"<li>{esc(v)}</li>" for v in (value or []) if str(v).strip())
+                    if bullets:
+                        parts.append(f"<ul>{bullets}</ul>")
+                else:
+                    text = str(value or "").strip()
+                    if not text:
+                        continue
+                    if not title_done:
+                        parts.insert(0, f'<h3 class="entry-title">{esc(text)}</h3>')
+                        title_done = True
+                    else:
+                        parts.append(f'<p class="entry-body">{esc(text)}</p>')
+            if parts:
+                entries.append(f'<article class="entry">{"".join(parts)}</article>')
+        return "".join(entries)
+
     def footer_block(self) -> str:
         """脚注只用来标记这份还是占位版。把 document.preview_note 和 edition 清空，
         脚注整条消失——真正要投出去的那一份不应该带任何生成说明。"""
@@ -300,17 +336,40 @@ class ResumeBuilder:
 
     # ---------- 整页 ----------
 
+    def body_rows(self) -> list[str]:
+        """按 body_order 拼出正文那几栏。内建四块走各自的手调版面，
+        自定义块走通用版面。栏目名来源各不相同：skills/experiences/projects
+        在各自的 *_section 表，education 在自己表里的 title，自定义块用
+        section["title"]（schema 把它放进了 block.section_default）。
+
+        没写 body_order 的老文件，effective_body_blocks 返回四内建块的原
+        顺序，拼出来的行与改造前逐字节相同。"""
+        content = self.content
+        builtin = {
+            "skills": lambda: self.row(
+                content["skills_section"]["title"], self.skills_block()),
+            "experiences": lambda: self.row(
+                content["experience_section"]["title"], self.experience_block()),
+            "projects": lambda: self.row(
+                content["projects_section"]["title"], self.projects_block()),
+            "education": lambda: self.row(
+                content["education"]["title"], self.education_block()),
+        }
+        rows = []
+        for block, data in schema.effective_body_blocks(content):
+            if block.key in builtin:
+                rows.append(builtin[block.key]())
+            else:
+                body = self.custom_block(block, data if isinstance(data, list) else [])
+                rows.append(self.row(block.section_default, body))
+        return rows
+
     def render_html(self) -> str:
         content = self.content
         document = content["document"]
         profile = content["profile"]
 
-        rows = "".join([
-            self.row(content["skills_section"]["title"], self.skills_block()),
-            self.row(content["experience_section"]["title"], self.experience_block()),
-            self.row(content["projects_section"]["title"], self.projects_block()),
-            self.row(content["education"]["title"], self.education_block()),
-        ])
+        rows = "".join(self.body_rows())
 
         return f"""<!doctype html>
 <html lang="zh-CN">
@@ -345,24 +404,25 @@ class ResumeBuilder:
 
 
 class PageOverflow(RuntimeError):
-    """内容超出了一页。带上页数，好让调用方原样报给用户。
+    """内容超出了允许的页数。带上实际页数和上限，好让调用方原样报给用户。
 
     仍然继承 RuntimeError：命令行和既有测试都按 RuntimeError 接它。
     """
 
-    def __init__(self, pages: int):
+    def __init__(self, pages: int, limit: int = 1):
         super().__init__(
-            f"渲染出了 {pages} 页，这份简历必须是一页。"
-            "请精简 content.toml，不要靠缩小字号硬塞。"
+            f"渲染出了 {pages} 页，超过了设定的 {limit} 页上限。"
+            "请精简内容，或把页数上限调大，不要靠缩小字号硬塞。"
         )
         self.pages = pages
+        self.limit = limit
 
 
-def render_pdf(markup: str, pdf_path: Path) -> None:
+def render_pdf(markup: str, pdf_path: Path, max_pages: int = 1) -> None:
     document = HTML(string=markup, base_url=str(HERE)).render()
     pages = len(document.pages)
-    if pages != 1:
-        raise PageOverflow(pages)
+    if pages > max_pages:
+        raise PageOverflow(pages, max_pages)
     document.write_pdf(pdf_path)
 
 
@@ -455,7 +515,7 @@ def write_outputs(content: dict, theme: dict, stylesheet: str,
     markup = ResumeBuilder(content, theme, stylesheet).render_html()
     with tempfile.TemporaryDirectory(prefix=".resume-", dir=out_dir) as temporary:
         staged = {kind: Path(temporary) / path.name for kind, path in paths.items()}
-        render_pdf(markup, staged["pdf"])
+        render_pdf(markup, staged["pdf"], schema.effective_max_pages(content))
         staged["html"].write_text(markup, encoding="utf-8")
         has_png = render_png(staged["pdf"], staged["png"])
         for kind in ("html", "pdf", "png"):

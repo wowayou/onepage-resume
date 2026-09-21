@@ -247,6 +247,17 @@ def dump_toml(content: dict) -> str:
         "# 想改某一处：直接编辑这个文件，或者再跑一次 python fill.py，",
         "# 每一题都会显示当前值，回车保留、输入覆盖。",
         "",
+    ]
+
+    # body_order 是根级键，必须写在任何 [表] 之前，否则会被解析进 [document]。
+    # 没写这个键的老文件（含 content.example.toml）走不到这里，输出逐字节不变。
+    order = content.get(schema.BODY_ORDER_KEY)
+    if isinstance(order, list):
+        out.append("# 正文板块的顺序；删掉某个内建块名 = 不渲染它（数据仍留档）。")
+        out.append(f"{schema.BODY_ORDER_KEY} = {render_value(order)}")
+        out.append("")
+
+    out += [
         "[document]",
         f'status = "{escape(str(content["document"].get("status", "real")))}"',
         f'updated = "{date.today().isoformat()}"',
@@ -289,7 +300,54 @@ def dump_toml(content: dict) -> str:
                     out.append(f"{item.key} = {render_value(table[item.key])}")
             out.append("")
 
+    _dump_custom_sections(content, out)
+
     return "\n".join(out).rstrip() + "\n"
+
+
+def _dump_custom_sections(content: dict, out: list[str]) -> None:
+    """把自定义板块写在所有内建块之后。字段定义（fields）和数据（items）都是
+    板块下的子表数组，所以 key/title/identity 必须先写，再写子表数组——
+    TOML 里一旦开了子表数组，就回不去给父表补标量键了。"""
+    sections = content.get(schema.CUSTOM_SECTIONS_KEY)
+    if not isinstance(sections, list) or not sections:
+        return
+    out.append("# 自定义板块：字段定义随内容文件走，用通用版面渲染。")
+    out.append("")
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        out.append(f"[[{schema.CUSTOM_SECTIONS_KEY}]]")
+        for key in ("key", "title", "identity"):
+            if key in section:
+                out.append(f"{key} = {render_value(section[key])}")
+        out.append("")
+
+        required: dict[str, bool] = {}
+        for field in section.get("fields", []):
+            if not isinstance(field, dict) or not isinstance(field.get("key"), str):
+                continue
+            required[field["key"]] = bool(field.get("required", True))
+            out.append(f"[[{schema.CUSTOM_SECTIONS_KEY}.fields]]")
+            for fk in ("key", "ask", "hint", "example", "kind"):
+                if fk in field:
+                    out.append(f"{fk} = {render_value(field[fk])}")
+            if "required" in field:
+                out.append(f"required = {'true' if field['required'] else 'false'}")
+            if field.get("default"):
+                out.append(f"default = {render_value(field['default'])}")
+            out.append("")
+
+        order = list(required)
+        for item in section.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            out.append(f"[[{schema.CUSTOM_SECTIONS_KEY}.items]]")
+            # 先按字段声明顺序写，未声明的键（若有）兜底补在后面，round-trip 不丢。
+            for fk in order + [k for k in item if k not in required]:
+                if fk in item and (item[fk] or required.get(fk, True)):
+                    out.append(f"{fk} = {render_value(item[fk])}")
+            out.append("")
 
 
 def refuse_derived(path: Path, existing: dict) -> None:

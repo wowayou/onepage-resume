@@ -139,7 +139,45 @@ def shape(payload: dict) -> dict:
     given_doc = payload.get("document")
     if isinstance(given_doc, dict) and given_doc.get("status"):
         content["document"]["status"] = given_doc["status"]
+
+    # 板块级编辑：正文顺序与自定义板块原样带过（已过 validate_types）。
+    # 自定义板块的 items 照它自己的字段定义补形状，空就是空，和内建块一致。
+    order = payload.get(schema.BODY_ORDER_KEY)
+    if isinstance(order, list):
+        content[schema.BODY_ORDER_KEY] = [t for t in order if isinstance(t, str)]
+    customs = payload.get(schema.CUSTOM_SECTIONS_KEY)
+    if isinstance(customs, list):
+        content[schema.CUSTOM_SECTIONS_KEY] = [
+            _shape_custom_section(section)
+            for section in customs if isinstance(section, dict)
+        ]
+
+    # 页数上限：只在用户把它调离默认 1 时才带过并落盘，保住老文件不多出这个键。
+    pages = payload.get(schema.MAX_PAGES_KEY)
+    if isinstance(pages, int) and not isinstance(pages, bool) \
+            and pages != schema.DEFAULT_MAX_PAGES:
+        content[schema.MAX_PAGES_KEY] = pages
     return content
+
+
+def _shape_custom_section(section: dict) -> dict:
+    """自定义板块只补 items 的形状，字段定义（key/ask/kind…）原样保留——
+    这些定义随内容文件走，是这个板块的"字段表"。"""
+    block = schema.build_custom_block(section)
+    rows = section.get("items")
+    rows = rows if isinstance(rows, list) else []
+    shaped: dict = {
+        "key": section["key"],
+        "title": section["title"],
+        "fields": section.get("fields", []),
+        "items": [
+            {f.key: _value(f, (row or {}).get(f.key)) for f in block.fields}
+            for row in rows
+        ],
+    }
+    if section.get("identity"):
+        shaped["identity"] = section["identity"]
+    return shaped
 
 
 def for_preview(content: dict) -> dict:
@@ -151,6 +189,14 @@ def for_preview(content: dict) -> dict:
     for block in schema.BLOCKS:
         if block.repeat and not preview.get(block.key):
             preview[block.key] = [
+                {f.key: ([] if f.kind in ("list", "lines") else "")
+                 for f in block.fields}
+            ]
+    # 自定义板块同理：空的塞一条空行，好让它的骨架也画出来。
+    for section in preview.get(schema.CUSTOM_SECTIONS_KEY, []):
+        if isinstance(section, dict) and not section.get("items"):
+            block = schema.build_custom_block(section)
+            section["items"] = [
                 {f.key: ([] if f.kind in ("list", "lines") else "")
                  for f in block.fields}
             ]
@@ -263,7 +309,8 @@ class Studio:
             pages = document.pages
             result = {"html": markup, "pages": len(pages), "preview_mode": "html",
                       "width": pages[0].width + 24, "height": pages[0].height + 48,
-                      "shown_pages": 1}
+                      "shown_pages": 1,
+                      "max_pages": schema.effective_max_pages(content)}
             if not shutil.which("pdftoppm"):
                 return result
             shown = pages[:PREVIEW_PAGE_LIMIT]

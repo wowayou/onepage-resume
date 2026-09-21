@@ -236,12 +236,34 @@ button.dirty::after {
 
 .block:last-child { border-bottom: 0; }
 
-.block > h2 {
+.block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.block-head > h2 {
   margin: 0;
   font-size: 13.5px;
   color: var(--seal);
   letter-spacing: 0.04em;
 }
+
+/* 板块头上的排序 / 改名 / 移除 */
+.section-tools { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* "加板块"面板：一排虚线按钮 */
+.add-block .add { margin-top: 8px; }
+
+/* 新建自定义板块对话框里的字段设计器 */
+.field-list { margin: 4px 0 2px; display: flex; flex-direction: column; gap: 6px; }
+
+.field-row { display: flex; align-items: center; gap: 6px; }
+
+.field-row input { flex: 1 1 auto; min-width: 0; }
+
+.field-row select { flex: 0 0 auto; }
 
 .block > .intro {
   margin: 4px 0 0;

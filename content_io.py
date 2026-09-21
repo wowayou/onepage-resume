@@ -173,21 +173,32 @@ def load_theme(path: Path, seen: tuple[Path, ...] = (), *,
 
 
 def apply_keep(content: dict, keep: dict, source: Path) -> dict:
-    blocks = {block.key: block for block in schema.BLOCKS if block.repeat}
+    """定制版按名挑基底里的条目。内建 repeat 块用自己的顶层 key，
+    自定义块用 "custom:<key>"（和 body_order 一致），identity 写在
+    section 里。挑完写回时重建 custom_sections，避免改到基底的原字典。"""
+    builtins = {block.key: block for block in schema.BLOCKS if block.repeat}
+    customs = schema.custom_block_map(content)  # "custom:key" → (Block, section)
+    available = {**builtins, **{token: block for token, (block, _) in customs.items()}}
     result = dict(content)
+    custom_items: dict[str, list] = {}
     for block_key, wanted in keep.items():
-        block = blocks.get(block_key)
+        block = available.get(block_key)
         if block is None:
             raise ValueError(f"{source.name} 的 [keep] 不支持 {block_key}；"
-                             f"可选：{' / '.join(sorted(blocks))}")
+                             f"可选：{' / '.join(sorted(available))}")
         if not isinstance(wanted, list) or not all(isinstance(name, str) for name in wanted):
             raise ValueError(f"{source.name} 的 [keep] {block_key} 必须是字符串数组。")
         if len(wanted) != len(set(wanted)):
             raise ValueError(f"{source.name} 的 [keep] {block_key} 有重复条目。")
+        if not block.identity:
+            raise ValueError(f"{source.name} 的 [keep] {block_key} 没声明 identity，"
+                             "无法按名唯一挑选。")
+        rows = customs[block_key][1].get("items", []) if block_key in customs \
+            else content.get(block_key, [])
         index: dict[str, dict] = {}
-        for row in content.get(block_key, []):
-            name = row.get(block.identity, "")
-            if not name.strip() or name in index:
+        for row in rows:
+            name = row.get(block.identity, "") if isinstance(row, dict) else ""
+            if not isinstance(name, str) or not name.strip() or name in index:
                 raise ValueError(f"{source.name} 的基底 {block_key}.{block.identity} "
                                  "为空或重复，无法唯一挑选。")
             index[name] = row
@@ -196,7 +207,20 @@ def apply_keep(content: dict, keep: dict, source: Path) -> dict:
             raise ValueError(f"{source.name} 的 [keep] {block_key} 里写了 "
                              f"{' / '.join(missing)}，但基底没有这一条。\n"
                              f"可选：{' / '.join(index) or '（空）'}")
-        result[block_key] = [index[name] for name in wanted]
+        picked = [index[name] for name in wanted]
+        if block_key in customs:
+            custom_items[block_key] = picked
+        else:
+            result[block_key] = picked
+    if custom_items:
+        rebuilt = []
+        for section in schema._raw_custom_sections(result):
+            if isinstance(section, dict) and isinstance(section.get("key"), str):
+                token = schema.CUSTOM_PREFIX + section["key"]
+                if token in custom_items:
+                    section = {**section, "items": custom_items[token]}
+            rebuilt.append(section)
+        result[schema.CUSTOM_SECTIONS_KEY] = rebuilt
     return result
 
 

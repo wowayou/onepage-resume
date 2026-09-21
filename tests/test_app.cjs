@@ -160,7 +160,8 @@ async function createApp() {
     + 'emptyContent, openFile, newFile, saveFile, saveAsFile, showHistory, '
     + 'fieldElement, toggleBlankList, jumpToBlank, updateBadge, relativeTime, '
     + 'showBlanks, window, showBuildDialog, runBuild, showResults, saveArtifactTo, '
-    + 'revealArtifact, canPickFiles};', context);
+    + 'revealArtifact, canPickFiles, bodyOrder, blockRows, moveSection, '
+    + 'deleteSection, restoreBuiltin, createCustomSection, customSections};', context);
   requests.shift().reply({
     ...info, files: [], themes: ['theme.toml'],
     default_theme: 'theme.toml', default_content: null,
@@ -753,4 +754,77 @@ test('save-to is offered only when the browser can pick a location', async () =>
   const button = [...kids(saveTo)].find((item) => item.textContent === '另存到…');
   assert.equal(button.disabled, true);
   assert.match(button.title, /不支持选择保存位置/);
+});
+
+test('body sections reorder, and removing a built-in keeps its data for later', async () => {
+  const app = await createApp();
+  app.state.content = structuredClone(info.example);
+  app.buildForm();
+
+  // 没写 body_order 的文件默认就是内建四块的原顺序
+  // （bodyOrder() 是 vm 里造的数组，跨 realm 摊进本 realm 再比，否则 deepEqual 认原型）
+  assert.deepEqual([...app.bodyOrder()], ['skills', 'experiences', 'projects', 'education']);
+
+  app.moveSection('experiences', -1);
+  assert.deepEqual([...app.bodyOrder()], ['experiences', 'skills', 'projects', 'education']);
+
+  // 移除内建块：从顺序里消失，但数据仍留在内容里
+  const projects = app.state.blocks.find((block) => block.key === 'projects');
+  const projectData = app.state.content.projects;
+  app.deleteSection(projects);
+  assert.ok(![...app.bodyOrder()].includes('projects'), '移除后不在顺序里');
+  assert.equal(app.state.content.projects, projectData, '移除内建块不该丢数据');
+
+  app.restoreBuiltin('projects');
+  assert.ok([...app.bodyOrder()].includes('projects'), '恢复后又回到顺序里');
+});
+
+test('creating a custom section adds it to content, order, and the form', async () => {
+  const app = await createApp();
+  app.state.content = structuredClone(info.example);
+  app.buildForm();
+
+  const pending = app.createCustomSection();
+  await flush();
+  const box = kids(app.document.body).at(-1);
+  assert.equal(box.tagName, 'DIALOG');
+
+  // 板块名
+  const title = kids(box).find((child) => child.className === 'dialog-input');
+  title.value = '获奖情况';
+
+  // 第一个字段名（值要 dispatch input，草稿才会跟着变，重画后不丢）
+  const firstRow = kids(kids(box).find((child) => child.className === 'field-list'))[0];
+  kids(firstRow)[0].value = '奖项';
+  kids(firstRow)[0].dispatch('input');
+
+  // 加第二个字段
+  kids(box).find((child) => child.className === 'add').dispatch('click');
+  const rows = kids(kids(box).find((child) => child.className === 'field-list'));
+  kids(rows[1])[0].value = '时间';
+  kids(rows[1])[0].dispatch('input');
+
+  clickDialog(app, '创建');
+  await pending;
+
+  const sections = [...app.customSections()];
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].title, '获奖情况');
+  assert.deepEqual([...sections[0].fields].map((field) => field.ask), ['奖项', '时间']);
+  assert.equal(sections[0].identity, 'f1', '第一个字段当标识');
+  assert.equal(sections[0].fields[0].required, true, '标题字段必填');
+  assert.equal(sections[0].fields[1].required, false, '其余字段可留空');
+  assert.ok([...app.bodyOrder()].includes(`custom:${sections[0].key}`));
+
+  // 表单里长出了这个板块
+  const heads = descendants(app.el.form)
+    .filter((element) => element.tagName === 'H2')
+    .map((element) => element.textContent);
+  assert.ok(heads.includes('获奖情况'), '表单里应当出现这个自定义板块');
+
+  // 删除它：连数据一起走
+  const block = app.state.blocks.find((item) => item.custom);
+  app.deleteSection(block);
+  assert.equal([...app.customSections()].length, 0);
+  assert.ok(![...app.bodyOrder()].some((token) => token.startsWith('custom:')));
 });

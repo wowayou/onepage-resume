@@ -32,7 +32,8 @@ const el = {
 };
 
 const state = {
-  blocks: [],                   // 字段表
+  builtins: [],                 // 内建八块的字段表（来自 bootstrap，恒定）
+  blocks: [],                   // 内建 + 当前内容里的自定义块，每次重画时合成
   content: {},                  // 当前表单内容，形状与 content.toml 一致
   files: [],                    // 内容目录里的文件 [{name, writable, reason, extends}]
   themes: [],
@@ -98,7 +99,8 @@ async function boot() {
     return;
   }
 
-  state.blocks = info.blocks;
+  state.builtins = info.blocks;
+  state.blocks = info.blocks;   // 首帧兜底；buildForm() 会用 syncBlocks() 重建
   state.listSeparator = new RegExp(info.input_rules.list_separator, 'u');
   state.trimPattern = new RegExp(`^${info.input_rules.whitespace}+|${info.input_rules.whitespace}+$`, 'gu');
   state.defaultContentName = info.default_content_name;

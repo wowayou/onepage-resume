@@ -810,7 +810,7 @@ class RenderApiTest(ServerTestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.post("/api/render", {"content": content})
         self.assertEqual(caught.exception.code, 422)
-        self.assertIn("一页", caught.exception.read().decode("utf-8"))
+        self.assertIn("页上限", caught.exception.read().decode("utf-8"))
 
     def test_artifact_inlines_pdf_and_png_but_never_html(self):
         _, payload = self.post(

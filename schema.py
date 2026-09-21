@@ -209,6 +209,122 @@ BLOCKS: tuple[Block, ...] = (
 )
 
 
+# ---------- 板块级编辑：body_order 与自定义板块 ----------
+# 内建四块在磁盘上保持字节不变。板块的顺序、删除、以及全自定义的新板块，
+# 靠两个新增的顶层键承载，老文件没有这两个键时行为完全不变：
+#
+#   body_order       正文板块的顺序。列表里没有的内建块 = 已删除（数据留档、
+#                    不渲染、不查空）。自定义块在列表里写成 "custom:<key>"。
+#   [[custom_sections]]  全自定义的新板块，字段定义随内容文件走（不进 describe()）。
+#                    每条有 key/title/identity/fields/items；用通用版面渲染。
+#
+# body_order 只管辖"正文那几栏"（有竖脊栏目名的块）。抬头与脚注
+# （document/profile/contacts/summary）始终渲染，不受它影响。
+BODY_BLOCKS: tuple[str, ...] = ("skills", "experiences", "projects", "education")
+BODY_ORDER_KEY = "body_order"
+CUSTOM_SECTIONS_KEY = "custom_sections"
+CUSTOM_PREFIX = "custom:"
+FIELD_KINDS = ("text", "lines", "list")
+
+# 允许的页数上限。这份工具的默认承诺仍是"一页"（DEFAULT_MAX_PAGES=1），
+# 但用户可以按需放宽到 MAX_PAGES_LIMIT 页——有些岗位就是要两页写得下经历。
+# max_pages 是根级标量键，没写这个键的老文件默认 1，落盘也不会凭空多出它。
+MAX_PAGES_KEY = "max_pages"
+DEFAULT_MAX_PAGES = 1
+MAX_PAGES_LIMIT = 5
+
+
+def effective_max_pages(content: dict) -> int:
+    """这份内容允许几页。没写 max_pages（或写歪了）就回落到默认的 1 页。
+    已通过 find_type_errors 的文件保证落在 1..MAX_PAGES_LIMIT。"""
+    value = content.get(MAX_PAGES_KEY, DEFAULT_MAX_PAGES)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return DEFAULT_MAX_PAGES
+    if value < 1:
+        return DEFAULT_MAX_PAGES
+    return min(value, MAX_PAGES_LIMIT)
+# 自定义板块的 key 与字段 key 都走这个：字母开头，字母数字下划线。
+IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
+
+
+def _raw_custom_sections(content: dict) -> list:
+    """内容里声明的自定义板块原始列表（未校验；不是列表就当没有）。"""
+    value = content.get(CUSTOM_SECTIONS_KEY)
+    return value if isinstance(value, list) else []
+
+
+def build_custom_block(section: dict) -> Block:
+    """把一个 custom_sections 条目转成 Block，好让查空、继承、表单等
+    照内建块的同一套机制消费它。假定结构已通过 find_type_errors 校验。
+
+    自定义块一律是数组表（repeat=True），栏目名就是 section["title"]，
+    不像内建块那样另存一张 *_section 表。"""
+    fields = tuple(
+        Field(
+            key=item["key"],
+            ask=item.get("ask") or item["key"],
+            hint=item.get("hint", ""),
+            example=item.get("example", ""),
+            kind=item.get("kind", "text"),
+            required=item.get("required", True),
+            default=item.get("default", ""),
+        )
+        for item in section.get("fields", [])
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    )
+    return Block(
+        key=CUSTOM_PREFIX + section["key"],
+        title=section["title"],
+        fields=fields,
+        repeat=True,
+        min_items=1,
+        section_default=section["title"],
+        identity=section.get("identity", ""),
+    )
+
+
+def custom_block_map(content: dict) -> dict[str, tuple[Block, dict]]:
+    """"custom:key" → (Block, 原始 section 字典)。只收结构完好的条目。"""
+    out: dict[str, tuple[Block, dict]] = {}
+    for section in _raw_custom_sections(content):
+        if (isinstance(section, dict)
+                and isinstance(section.get("key"), str)
+                and isinstance(section.get("title"), str)):
+            out[CUSTOM_PREFIX + section["key"]] = (build_custom_block(section), section)
+    return out
+
+
+def effective_body_order(content: dict) -> list[str]:
+    """有效的正文板块顺序，返回 token 列表（内建块用 key，自定义块用
+    "custom:key"）。没写 body_order 时用内建默认顺序，再按声明顺序追加
+    所有自定义块；写了就原样采用（已通过校验，token 都指向存在的块）。"""
+    customs = [CUSTOM_PREFIX + section["key"]
+               for section in _raw_custom_sections(content)
+               if isinstance(section, dict) and isinstance(section.get("key"), str)]
+    declared = content.get(BODY_ORDER_KEY)
+    if not isinstance(declared, list):
+        return list(BODY_BLOCKS) + customs
+    return [token for token in declared if isinstance(token, str)]
+
+
+def effective_body_blocks(content: dict) -> list[tuple[Block, object]]:
+    """按 body_order 解析出要渲染/查空的正文板块，每项 (block, rows)。
+    内建块 rows 取自 content[block.key]（education 非数组，rows 是那张表）；
+    自定义块 rows 取自它自己的 items 列表。指不到的 token 跳过。"""
+    builtins = {block.key: block for block in BLOCKS}
+    customs = custom_block_map(content)
+    out: list[tuple[Block, object]] = []
+    for token in effective_body_order(content):
+        if token in customs:
+            block, section = customs[token]
+            items = section.get("items")
+            out.append((block, items if isinstance(items, list) else []))
+        elif token in builtins and token in BODY_BLOCKS:
+            block = builtins[token]
+            out.append((block, content.get(block.key)))
+    return out
+
+
 # ---------- 字段表的 JSON 视图 ----------
 # webui.py 把它发给浏览器，网页表单是照着它长出来的（题干、解释、例子、
 # 是不是数组、能不能留空，全都来自这里）。所以"这份简历有哪些空"依然只在
@@ -227,6 +343,10 @@ def describe() -> list[dict]:
             "max_items": block.max_items,
             "section_key": block.section_key,
             "section_default": block.section_default,
+            "identity": block.identity,
+            # 正文块（有竖脊栏目名，能排序 / 删除）为 True；抬头四块为 False。
+            # 前端照这个分栏，不再自己维护一份内建块名单（定义只在这里一处）。
+            "body": block.key in BODY_BLOCKS,
             "fields": [
                 {
                     "key": item.key,
@@ -266,6 +386,7 @@ def find_type_errors(content: object) -> list[str]:
     errors: list[str] = []
     allowed = {block.key for block in BLOCKS}
     allowed.update(block.section_key for block in BLOCKS if block.section_key)
+    allowed.update((BODY_ORDER_KEY, CUSTOM_SECTIONS_KEY, MAX_PAGES_KEY))
     for key in content.keys() - allowed:
         errors.append(f"未知内容块：{key}")
 
@@ -316,7 +437,147 @@ def find_type_errors(content: object) -> list[str]:
         else:
             check_table(value, block.fields, f"[{block.key}]",
                         DOCUMENT_METADATA if block.key == "document" else ())
+
+    _check_custom_sections(content, errors, check_table)
+    _check_body_order(content, errors)
+    _check_max_pages(content, errors)
     return errors
+
+
+# custom_sections 条目自己那几个键（key/title/identity/fields/items）之外不许有别的。
+CUSTOM_SECTION_KEYS = frozenset({"key", "title", "identity", "fields", "items"})
+# 每个字段定义允许的键，与 Field 的构造参数对应。
+CUSTOM_FIELD_KEYS = frozenset(
+    {"key", "ask", "hint", "example", "kind", "required", "default"})
+
+
+def _check_custom_sections(content: dict, errors: list[str],
+                           check_table) -> None:
+    """校验 [[custom_sections]] 的结构：板块 key/title/identity、字段定义、
+    以及每条 items 是否合乎它自己声明的字段。结构由数据承载，所以校验也在
+    这里做，不能像内建块那样交给静态 BLOCKS。"""
+    value = content.get(CUSTOM_SECTIONS_KEY)
+    if value is None:
+        return
+    if not isinstance(value, list):
+        errors.append(f"[[{CUSTOM_SECTIONS_KEY}]] 必须是数组表。")
+        return
+
+    seen_keys: set[str] = set()
+    for index, section in enumerate(value, 1):
+        where = f"[[{CUSTOM_SECTIONS_KEY}]] 第 {index} 个"
+        if not isinstance(section, dict):
+            errors.append(f"{where} 必须是表。")
+            continue
+        for extra in section.keys() - CUSTOM_SECTION_KEYS:
+            errors.append(f"{where} 未知字段：{extra}")
+
+        key = section.get("key")
+        if not isinstance(key, str) or not IDENTIFIER.match(key):
+            errors.append(f"{where} 的 key 必须是字母开头的标识符（字母数字下划线）。")
+        elif key in seen_keys:
+            errors.append(f"{where} 的 key「{key}」与前面的自定义板块重复。")
+        else:
+            seen_keys.add(key)
+
+        title = section.get("title")
+        if not isinstance(title, str) or not title.strip():
+            errors.append(f"{where} 的 title（栏目名）必须是非空字符串。")
+
+        # 字段定义
+        fields = section.get("fields")
+        field_keys: list[str] = []
+        parsed_fields: list[Field] = []
+        if not isinstance(fields, list) or not fields:
+            errors.append(f"{where} 至少要声明一个字段（fields）。")
+        else:
+            for field_index, field in enumerate(fields, 1):
+                floc = f"{where} 第 {field_index} 个字段"
+                if not isinstance(field, dict):
+                    errors.append(f"{floc} 必须是表。")
+                    continue
+                for extra in field.keys() - CUSTOM_FIELD_KEYS:
+                    errors.append(f"{floc} 未知字段：{extra}")
+                fkey = field.get("key")
+                if not isinstance(fkey, str) or not IDENTIFIER.match(fkey):
+                    errors.append(f"{floc} 的 key 必须是字母开头的标识符。")
+                elif fkey in field_keys:
+                    errors.append(f"{floc} 的 key「{fkey}」在同一板块里重复。")
+                else:
+                    field_keys.append(fkey)
+                kind = field.get("kind", "text")
+                if kind not in FIELD_KINDS:
+                    errors.append(
+                        f"{floc} 的 kind 只能是 {'、'.join(FIELD_KINDS)}。")
+                for text_key in ("ask", "hint", "example", "default"):
+                    if text_key in field and not isinstance(field[text_key], str):
+                        errors.append(f"{floc} 的 {text_key} 必须是字符串。")
+                if "required" in field and not isinstance(field["required"], bool):
+                    errors.append(f"{floc} 的 required 必须是 true 或 false。")
+                if (isinstance(fkey, str) and IDENTIFIER.match(fkey)
+                        and kind in FIELD_KINDS):
+                    parsed_fields.append(Field(
+                        key=fkey, ask="", kind=kind,
+                        required=bool(field.get("required", True))))
+
+        # identity 必须指向某个已声明的字段
+        identity = section.get("identity")
+        if not isinstance(identity, str) or not identity:
+            errors.append(f"{where} 的 identity（认条目用的字段）必须填。")
+        elif field_keys and identity not in field_keys:
+            errors.append(
+                f"{where} 的 identity「{identity}」不是它声明过的字段。")
+
+        # items：每条按声明的字段校验（复用内建块那套 check_table）
+        items = section.get("items")
+        if items is not None:
+            if not isinstance(items, list):
+                errors.append(f"{where} 的 items 必须是数组表。")
+            else:
+                title_text = title if isinstance(title, str) else key
+                for item_index, item in enumerate(items, 1):
+                    check_table(item, tuple(parsed_fields),
+                                f"{where}（{title_text}）第 {item_index} 条")
+
+
+def _check_body_order(content: dict, errors: list[str]) -> None:
+    """校验 body_order：必须是字符串列表，每个 token 指向一个存在的正文板块
+    （内建块用 key，自定义块用 custom:key），不许重复。"""
+    declared = content.get(BODY_ORDER_KEY)
+    if declared is None:
+        return
+    if not isinstance(declared, list):
+        errors.append(f"{BODY_ORDER_KEY} 必须是字符串数组。")
+        return
+    known = set(BODY_BLOCKS)
+    for section in _raw_custom_sections(content):
+        if isinstance(section, dict) and isinstance(section.get("key"), str):
+            known.add(CUSTOM_PREFIX + section["key"])
+    seen: set[str] = set()
+    for token in declared:
+        if not isinstance(token, str):
+            errors.append(f"{BODY_ORDER_KEY} 里的每一项都必须是字符串。")
+            continue
+        if token in seen:
+            errors.append(f"{BODY_ORDER_KEY} 里「{token}」出现了不止一次。")
+            continue
+        seen.add(token)
+        if token not in known:
+            errors.append(f"{BODY_ORDER_KEY} 里「{token}」指向了不存在的板块。")
+
+
+def _check_max_pages(content: dict, errors: list[str]) -> None:
+    """校验 max_pages：写了就必须是 1..MAX_PAGES_LIMIT 的整数。
+    bool 是 int 的子类，得单独挡掉（true 不是 1 页）。"""
+    if MAX_PAGES_KEY not in content:
+        return
+    value = content[MAX_PAGES_KEY]
+    if isinstance(value, bool) or not isinstance(value, int):
+        errors.append(f"{MAX_PAGES_KEY} 必须是整数。")
+        return
+    if not 1 <= value <= MAX_PAGES_LIMIT:
+        errors.append(
+            f"{MAX_PAGES_KEY} 必须在 1 到 {MAX_PAGES_LIMIT} 之间（现在是 {value}）。")
 
 
 def validate_types(content: object) -> None:
@@ -369,7 +630,7 @@ def find_blank_locations(content: dict) -> list[dict]:
                             "message": msg,
                         })
 
-    for block in BLOCKS:
+    def check_block(block: Block, value: object) -> None:
         if block.section_key and _empty(
             (content.get(block.section_key) or {}).get("title")
         ):
@@ -384,7 +645,7 @@ def find_blank_locations(content: dict) -> list[dict]:
             })
 
         if not block.repeat:
-            table = content.get(block.key)
+            table = value
             if not isinstance(table, dict):
                 msg = f"[{block.key}] 整块缺失 —— {block.title}"
                 locations.append({
@@ -395,11 +656,11 @@ def find_blank_locations(content: dict) -> list[dict]:
                     "section": False,
                     "message": msg,
                 })
-                continue
+                return
             check_fields(table, block, None)
-            continue
+            return
 
-        rows = content.get(block.key)
+        rows = value
         if not isinstance(rows, list) or len(rows) < block.min_items:
             msg = f"[[{block.key}]] 至少要有 {block.min_items} 条 —— {block.title}"
             locations.append({
@@ -410,7 +671,7 @@ def find_blank_locations(content: dict) -> list[dict]:
                 "section": False,
                 "message": msg,
             })
-            continue
+            return
         if block.max_items and len(rows) > block.max_items:
             msg = f"[[{block.key}]] 最多 {block.max_items} 条 —— {block.title}"
             locations.append({
@@ -423,6 +684,15 @@ def find_blank_locations(content: dict) -> list[dict]:
             })
         for index, row in enumerate(rows):
             check_fields(row, block, index)
+
+    # 抬头与脚注那几块（document/profile/contacts/summary）始终检查，
+    # 不受 body_order 影响；正文块按 body_order 走——删掉的块不查，自定义块照查。
+    for block in BLOCKS:
+        if block.key in BODY_BLOCKS:
+            continue
+        check_block(block, content.get(block.key))
+    for block, rows in effective_body_blocks(content):
+        check_block(block, rows)
 
     return locations
 

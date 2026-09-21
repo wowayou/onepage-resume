@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,86 @@ class SerializationTest(unittest.TestCase):
                     empty = [] if field.kind in ("list", "lines") else ""
                     with self.subTest(block=block.key, field=field.key):
                         self.assertEqual(before.get(field.key, empty), after.get(field.key, empty))
+
+    def test_custom_sections_and_body_order_round_trip(self):
+        """自定义板块 + body_order 经 shape → dump → 重载后结构与数据不丢。"""
+        content = webui.shape(render.load_content(ROOT / "content.example.toml"))
+        content["body_order"] = ["experiences", "custom:awards", "skills",
+                                 "projects", "education"]
+        content["custom_sections"] = [{
+            "key": "awards", "title": "获奖情况", "identity": "name",
+            "fields": [
+                {"key": "name", "ask": "奖项", "kind": "text", "required": True},
+                {"key": "when", "ask": "时间", "kind": "text", "required": False},
+                {"key": "notes", "ask": "说明", "kind": "lines", "required": False},
+            ],
+            "items": [{"name": "最佳新人", "when": "2025",
+                       "notes": ["第一行", "第二行"]}],
+        }]
+        # shape 只补形状不改内容，这里先确认它把两个键原样带过
+        shaped = webui.shape(content)
+        self.assertEqual(shaped["body_order"], content["body_order"])
+        self.assertEqual(shaped["custom_sections"][0]["items"],
+                         content["custom_sections"][0]["items"])
+
+        reloaded = tomllib.loads(fill.dump_toml(shaped))
+        self.assertEqual(schema.find_type_errors(reloaded), [])
+        self.assertEqual(reloaded["body_order"], content["body_order"])
+        section = reloaded["custom_sections"][0]
+        self.assertEqual(section["key"], "awards")
+        self.assertEqual(section["title"], "获奖情况")
+        self.assertEqual(section["identity"], "name")
+        self.assertEqual([f["key"] for f in section["fields"]],
+                         ["name", "when", "notes"])
+        self.assertEqual(section["items"], content["custom_sections"][0]["items"])
+
+    def test_plain_file_dump_gains_no_new_keys(self):
+        """没动过板块的老文件落盘后不该凭空多出 body_order / custom_sections。"""
+        text = fill.dump_toml(webui.shape(render.load_content(ROOT / "content.example.toml")))
+        self.assertNotIn("body_order", text)
+        self.assertNotIn("custom_sections", text)
+
+    def _render(self, content):
+        theme = render.load_theme(ROOT / "theme.toml")
+        css = render.build_stylesheet(theme, ROOT / "resume.css")
+        return render.ResumeBuilder(content, theme, css).render_html()
+
+    def test_render_is_byte_identical_for_the_untouched_example(self):
+        """没有 body_order / custom_sections 的文件，渲染结果与改造前逐字节一致。"""
+        content = render.load_content(ROOT / "content.example.toml")
+        html = self._render(content)
+        self.assertEqual(
+            hashlib.sha256(html.encode("utf-8")).hexdigest(),
+            "68d798ab69d3c77ed355d0792024d91f917941b839913a7f0d176cc7c4137ea4")
+
+    def test_body_order_reorders_and_deleting_a_builtin_drops_its_row(self):
+        content = render.load_content(ROOT / "content.example.toml")
+        # 去掉 projects，把 education 提到最前
+        content["body_order"] = ["education", "skills", "experiences"]
+        html = self._render(content)
+        self.assertNotIn("项目作品", html, "删掉的内建块不该出现在渲染里")
+        # 比竖脊栏目名的位置，别比正文里的词（正文里也可能提到"核心能力"）
+        self.assertLess(html.index('<div class="rail"><span>教育背景</span>'),
+                        html.index('<div class="rail"><span>核心能力</span>'),
+                        "education 应当排到 skills 之前")
+        # 数据仍在内容里，只是没渲染——移除是可逆的
+        self.assertTrue(content["projects"])
+
+    def test_custom_section_renders_with_generic_layout(self):
+        content = render.load_content(ROOT / "content.example.toml")
+        content["custom_sections"] = [{
+            "key": "awards", "title": "获奖情况", "identity": "name",
+            "fields": [
+                {"key": "name", "kind": "text", "required": True},
+                {"key": "notes", "kind": "lines", "required": False},
+            ],
+            "items": [{"name": "年度最佳", "notes": ["评语一", "评语二"]}],
+        }]
+        html = self._render(content)
+        self.assertIn("获奖情况", html)
+        self.assertIn("年度最佳", html)
+        self.assertIn("评语一", html)
+        self.assertIn('class="entry"', html, "自定义块走通用 .entry 版面")
 
     def test_blank_sample_uses_the_shared_separator(self):
         block = schema.Block("test", "测试", (
@@ -252,6 +333,31 @@ class InheritanceSafetyTest(FileTestCase):
         picked = content_io.apply_keep(self.content, {"skills": [label]}, self.path)
         self.assertEqual(self.content, original)
         self.assertEqual(len(picked["skills"]), 1)
+
+    def test_keep_picks_from_a_custom_section_by_identity(self):
+        """[keep] 能按名挑自定义板块里的条目（token 写成 custom:<key>），
+        挑完只留中选的那几条，且不改到基底的原字典。"""
+        base = copy.deepcopy(self.content)
+        base["custom_sections"] = [{
+            "key": "awards", "title": "获奖情况", "identity": "name",
+            "fields": [{"key": "name", "ask": "奖项", "kind": "text", "required": True}],
+            "items": [{"name": "甲"}, {"name": "乙"}, {"name": "丙"}],
+        }]
+        original = copy.deepcopy(base)
+        picked = content_io.apply_keep(base, {"custom:awards": ["丙", "甲"]}, self.path)
+        self.assertEqual(base, original, "挑选不得改到基底")
+        names = [row["name"] for row in picked["custom_sections"][0]["items"]]
+        self.assertEqual(names, ["丙", "甲"], "按 keep 的顺序只留中选的条目")
+
+    def test_keep_rejects_a_name_missing_from_a_custom_section(self):
+        base = copy.deepcopy(self.content)
+        base["custom_sections"] = [{
+            "key": "awards", "title": "获奖情况", "identity": "name",
+            "fields": [{"key": "name", "ask": "奖项", "kind": "text", "required": True}],
+            "items": [{"name": "甲"}],
+        }]
+        with self.assertRaisesRegex(ValueError, "乙"):
+            content_io.apply_keep(base, {"custom:awards": ["乙"]}, self.path)
 
     def test_symlinks_and_non_content_parents_are_rejected_in_browser(self):
         parent = self.directory / "theme.toml"
