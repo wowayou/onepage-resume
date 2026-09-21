@@ -580,7 +580,8 @@ python render.py --content content.acme.toml
    | `contacts` | `value` |
 
    **名字拼错会当场报错**，并把可选值列给你。它不会静默丢掉一整条经历——
-   那种错在 PDF 上看不出来，投出去才发现少了一段。
+   那种错在 PDF 上看不出来，投出去才发现少了一段。自定义板块也能挑：键写成
+   `custom:<key>`，认条目用它声明的 `identity` 字段。
 
 继承可以多层（`基底 → 行业版 → 公司版`），成环会报错。
 
@@ -618,7 +619,7 @@ python fill.py --check --out content.acme.toml   # 这个可以：检查合并�
 - **嫌挤先加间距，不要缩字号。** `theme.toml` 里 `section-gap` / `entry-gap` /
   `bullet-gap` / `skill-row-gap` 四个值专门管块与块之间的停顿。版面显得密，通常是因为
   没有停顿，不是因为字太大——缩字号只会让它既密又难读。加到装不下时程序会报错，
-  那时该砍的是内容里的字。
+  那时该砍的是内容里的字（确实需要更多版面时，把 `max_pages` 调到 2–5，见上一节）。
 - **一句话别拖到换行后只剩两三个字。** 这种"孤儿行"是全页最伤阅读的东西。改完看一眼
   PNG，发现了就把句子删掉几个字，通常砍掉句尾的评论性收尾就够了。
 - **不可断空格**：示例里 `Looker Studio`、`Top 10`、`Cloudflare Pages` 中间是
@@ -689,7 +690,7 @@ max_pages = 2          # 根级键，1..5，默认 1
 |---|---|---|
 | PDF 里中文是方块 | 没装 CJK 字体 | `sudo apt install fonts-noto-cjk && fc-cache -fv` |
 | `cannot load library 'libgobject-2.0-0'` | 缺 pango / glib 系统库 | 按"环境准备"装齐 apt 包 |
-| `渲染出了 2 页` | 内容超了 | 砍内容，别缩字号 |
+| `渲染出了 2 页` | 内容超了页数上限 | 砍内容别缩字号；确实要多页就调大 `max_pages`（1..5） |
 | 打印"虚构示例" | 没找到你的内容文件 | 检查文件名，或用 `--content` 指定 |
 | 没有 PNG | 缺 `pdftoppm` | `sudo apt install poppler-utils` |
 | 字重不对 / 伪粗体 | 回落到了 SimSun | 装 Noto Serif CJK SC，或直接用 WSL2 |
