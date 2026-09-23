@@ -5,6 +5,9 @@
  *    脚注上的细线，共用同一套语言。不要再加圆点、色块、圆角卡片或图标。
  * 2. 左侧竖脊是唯一的结构装置，取代了旧版每个标题后面那条横线。
  *    栏目名靠右贴着竖脊，读者顺着这条线就能找到区块。
+ *    竖脊左边那列窄带是页边，不是内容列：抬头（姓名、身份行、概况）和各区块
+ *    正文共用竖脊右边同一条文字边缘，全页只有这一条。窄带里只在有栏目名的
+ *    地方有字，其余留白——文字边缘不因此出现台阶。
  * 3. 经历和项目共用同一形状：标题行 + 面包屑元信息行 + 正文。
  *    面包屑用 › 表示层级（公司 › 团队 › 时间），顶部身份行用 · 表示并列。
  * 4. 只有一个强调色 --seal。所有颜色都在 theme.toml 里，不要在这里写死色值。
@@ -56,9 +59,11 @@ h1 {
   color: var(--seal);
 }
 
+/* 主线往左伸到竖脊，两条线接成一个直角，把正文括在里面。
+   越界的只有线：文字一律从 col 的左边缘起。 */
 .masthead-rule {
   height: var(--masthead);
-  margin-top: 7pt;
+  margin: 7pt 0 0 calc(var(--gutter) * -1);
   background: var(--seal);
 }
 
@@ -68,9 +73,9 @@ h1 {
   color: var(--steel);
 }
 
+/* 概况是正文的第一段，跟着 col 走，不用自己缩进。 */
 .snippet {
   margin: 11pt 0 0;
-  max-width: var(--measure);
   font-size: var(--snippet);
   line-height: var(--snippet-leading);
   color: var(--ink-2);
@@ -120,10 +125,11 @@ h1 {
   padding-bottom: 1pt;
 }
 
-.row:first-child .rail,
-.row:first-child .col { padding-top: calc(var(--section-gap) + 3pt); }
+/* 抬头也是一个 .row，只是 rail 空着：它不需要区块间距，也不该在竖脊上留记号。 */
+.masthead-row .rail,
+.masthead-row .col { padding-top: 0; }
 
-.row:first-child .rail::after { top: calc(var(--section-gap) + 3pt); }
+.masthead-row .rail::after { content: none; }
 
 /* ---------- 核心能力 ---------- */
 

@@ -8,7 +8,6 @@ extends = "theme.toml"
 [layout]
 rail = "68pt"          # 够放 EXPERIENCE 这个最长的栏目名
 skill-label = "96pt"   # 够放 Content & Channels
-measure = "168mm"
 
 [type]
 rail-label = "8.4pt"

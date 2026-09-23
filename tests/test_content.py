@@ -84,12 +84,17 @@ class SerializationTest(unittest.TestCase):
         return render.ResumeBuilder(content, theme, css).render_html()
 
     def test_render_is_byte_identical_for_the_untouched_example(self):
-        """没有 body_order / custom_sections 的文件，渲染结果与改造前逐字节一致。"""
+        """没有 body_order / custom_sections 的文件，渲染结果逐字节不变。
+
+        守的是"老文件不受板块可编辑那套改造影响"。注意哈希算的是整份 HTML，
+        而版式 CSS 是内联进去的——所以有意改 resume.css / theme.toml 时它也会红。
+        那种情况按新的重算一遍哈希填回来（先确认渲出来的版面确实是你要的）。
+        """
         content = render.load_content(ROOT / "content.example.toml")
         html = self._render(content)
         self.assertEqual(
             hashlib.sha256(html.encode("utf-8")).hexdigest(),
-            "68d798ab69d3c77ed355d0792024d91f917941b839913a7f0d176cc7c4137ea4")
+            "ccce04b150560ec5390d157d82cc64d5122e5741a4ca4408a77aaa39fbfef6a2")
 
     def test_body_order_reorders_and_deleting_a_builtin_drops_its_row(self):
         content = render.load_content(ROOT / "content.example.toml")

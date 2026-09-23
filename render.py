@@ -386,15 +386,20 @@ class ResumeBuilder:
 </head>
 <body>
 <main class="sheet">
-  <header class="masthead">
-    <div class="masthead-line">
-      <h1>{esc(profile["name"])}</h1>
-      <p class="intent">{esc(profile["intent"])}</p>
+  <section class="row masthead-row">
+    <div class="rail"></div>
+    <div class="col">
+      <header class="masthead">
+        <div class="masthead-line">
+          <h1>{esc(profile["name"])}</h1>
+          <p class="intent">{esc(profile["intent"])}</p>
+        </div>
+        <div class="masthead-rule"></div>
+        <p class="identity">{self.identity_line()}</p>
+        <p class="snippet">{esc(content["summary"]["text"])}</p>
+      </header>
     </div>
-    <div class="masthead-rule"></div>
-    <p class="identity">{self.identity_line()}</p>
-    <p class="snippet">{esc(content["summary"]["text"])}</p>
-  </header>
+  </section>
 {rows}
   {self.footer_block()}
 </main>
