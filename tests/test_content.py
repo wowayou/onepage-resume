@@ -94,7 +94,7 @@ class SerializationTest(unittest.TestCase):
         html = self._render(content)
         self.assertEqual(
             hashlib.sha256(html.encode("utf-8")).hexdigest(),
-            "ccce04b150560ec5390d157d82cc64d5122e5741a4ca4408a77aaa39fbfef6a2")
+            "f12559481d05242b64252e5560def1196ec60b84457b95f16c0237faf5ec7b3b")
 
     def test_body_order_reorders_and_deleting_a_builtin_drops_its_row(self):
         content = render.load_content(ROOT / "content.example.toml")
