@@ -798,6 +798,52 @@ class RenderApiTest(ServerTestCase):
         self.assertTrue(body.startswith(b"%PDF"))
         self.assertIn("attachment", headers["Content-Disposition"])
 
+    def post_raw(self, path: str, payload: dict):
+        """不解析响应体的 POST。deliver=pick 回的是 PDF 字节，不是 JSON。"""
+        request = urllib.request.Request(
+            self.base + path,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.status, response.read(), response.headers
+
+    def test_deliver_pick_returns_pdf_bytes_and_writes_nothing(self):
+        """"只存到我选的位置"：字节直接回给浏览器，存档目录一个文件都不许多。"""
+        out = self.dir / "build"
+        before = sorted(p.name for p in out.iterdir()) if out.exists() else []
+
+        status, body, headers = self.post_raw(
+            "/api/render",
+            {"content": example_content(), "theme": "theme.toml",
+             "basename": "不落盘-简历", "deliver": "pick"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"%PDF"))
+        self.assertEqual(headers["Content-Type"], "application/pdf")
+        # 文件名仍然带过去：保存对话框拿它做预填
+        self.assertIn("attachment", headers["Content-Disposition"])
+        self.assertIn(urllib.parse.quote("不落盘-简历.pdf"),
+                      headers["Content-Disposition"])
+
+        after = sorted(p.name for p in out.iterdir()) if out.exists() else []
+        self.assertEqual(after, before, "这条路不该在存档目录里留下任何东西")
+
+    def test_deliver_pick_still_enforces_the_page_limit(self):
+        """页数上限是唯一的硬承诺，不落盘那条路也不许绕过去。"""
+        content = example_content()
+        content["experiences"] = content["experiences"] * 6
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/render", {"content": content, "deliver": "pick"})
+        self.assertEqual(caught.exception.code, 422)
+        self.assertEqual(json.loads(caught.exception.read())["code"], "overflow")
+
+    def test_render_refuses_an_unknown_deliver(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/render", {"content": example_content(), "deliver": "随便"})
+        self.assertEqual(caught.exception.code, 400)
+
     def test_refuses_to_render_with_blanks(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.post("/api/render", {"content": {}})

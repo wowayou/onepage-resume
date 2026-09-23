@@ -418,12 +418,22 @@ class PageOverflow(RuntimeError):
         self.limit = limit
 
 
-def render_pdf(markup: str, pdf_path: Path, max_pages: int = 1) -> None:
+def render_pdf_bytes(markup: str, max_pages: int = 1) -> bytes:
+    """渲染成 PDF 字节，一个文件都不写。
+
+    网页端"只存到我选的位置"走这条：那份 PDF 的落点由浏览器的保存对话框决定，
+    中途不该在磁盘上先留一份副本。页数上限照查——那是这个工具唯一的硬承诺，
+    哪条路都不许绕过去。
+    """
     document = HTML(string=markup, base_url=str(HERE)).render()
     pages = len(document.pages)
     if pages > max_pages:
         raise PageOverflow(pages, max_pages)
-    document.write_pdf(pdf_path)
+    return document.write_pdf()
+
+
+def render_pdf(markup: str, pdf_path: Path, max_pages: int = 1) -> None:
+    pdf_path.write_bytes(render_pdf_bytes(markup, max_pages))
 
 
 def render_png(pdf_path: Path, png_path: Path) -> bool:

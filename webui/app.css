@@ -714,7 +714,7 @@ button.dirty::after {
   color: var(--steel);
 }
 
-/* ---------- 对话框里的备注、选项与复选框 ---------- */
+/* ---------- 对话框里的备注与选项 ---------- */
 
 .dialog-note {
   margin: 8px 0 0;
@@ -728,8 +728,7 @@ button.dirty::after {
 
 .dialog-choice { margin-top: 8px; }
 
-.dialog-choice-item,
-.dialog-check {
+.dialog-choice-item {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -738,5 +737,4 @@ button.dirty::after {
   color: var(--ink-2);
 }
 
-.dialog-choice-item input,
-.dialog-check input { flex: 0 0 auto; }
+.dialog-choice-item input { flex: 0 0 auto; }

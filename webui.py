@@ -355,6 +355,21 @@ class Studio:
         }
 
 
+    def build_pdf_bytes(self, content: dict, theme_name: str | None) -> bytes:
+        """只渲染 PDF 并把字节交回去，out_dir 一个文件都不碰。
+
+        给"只存到我选的位置"那条路用：落点是浏览器保存对话框选的那个文件，
+        存档目录里不该多出一份用户没要的副本。也因此这里没有 basename 和
+        if_exists——名字由保存对话框定，撞名由用户当场看着办。
+        """
+        theme = self.theme(theme_name)
+        stylesheet = render.build_stylesheet(theme, self.css_path)
+        schema.validate_types(content)
+        markup = render.ResumeBuilder(content, theme, stylesheet).render_html()
+        with PREVIEW_LOCK:
+            return render.render_pdf_bytes(markup, schema.effective_max_pages(content))
+
+
 # ---------- HTTP ----------
 
 class Handler(BaseHTTPRequestHandler):
@@ -761,6 +776,23 @@ class Handler(BaseHTTPRequestHandler):
             )
 
         basename = safe_basename(render.resolve_basename(payload.get("basename"), content))
+
+        # 两条交付路。archive（默认）把三份落进 out_dir 存档，回一份 JSON 清单；
+        # pick 只渲染 PDF、把字节交给浏览器，由它写到用户选的位置——那条路
+        # out_dir 一个文件都不碰，所以也没有撞名一说。
+        deliver = payload.get("deliver") or "archive"
+        if deliver not in ("archive", "pick"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "bad_request",
+                           f"未知的交付方式：{deliver!r}")
+        if deliver == "pick":
+            try:
+                body = self.studio.build_pdf_bytes(content, payload.get("theme"))
+            except render.PageOverflow as error:
+                raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "overflow",
+                               str(error), pages=error.pages) from error
+            self.send_bytes(body, "application/pdf", download=f"{basename}.pdf")
+            return
+
         # 网页默认"撞名就问"，和命令行的默认覆盖相反：这里多问一句几乎没成本，
         # 而无声覆盖掉上一次的生成物是不可逆的。
         if_exists = payload.get("if_exists") or "fail"

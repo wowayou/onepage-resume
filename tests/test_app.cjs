@@ -159,7 +159,8 @@ async function createApp() {
     + 'preview, updateActions, dialog, api, fromInput, toInput, buildForm, '
     + 'emptyContent, openFile, newFile, saveFile, saveAsFile, showHistory, '
     + 'fieldElement, toggleBlankList, jumpToBlank, updateBadge, relativeTime, '
-    + 'showBlanks, window, showBuildDialog, runBuild, showResults, saveArtifactTo, '
+    + 'showBlanks, window, showBuildDialog, runBuild, runBuildToPick, showResults, '
+    + 'clearResults, saveArtifactTo, '
     + 'revealArtifact, canPickFiles, bodyOrder, blockRows, moveSection, '
     + 'deleteSection, restoreBuiltin, createCustomSection, customSections};', context);
   requests.shift().reply({
@@ -458,7 +459,7 @@ test('stale build results do not offer old files or re-enable generation', async
   app.state.previewReady = true;
   app.state.pages = 1;
   app.updateActions();
-  const pending = app.runBuild('resume', 'overwrite', false);
+  const pending = app.runBuild('resume', 'overwrite');
   app.touched();
   app.requests.shift().reply({
     basename: 'resume', files: { pdf: 'old.pdf' }, out_dir: '/tmp/build',
@@ -476,7 +477,7 @@ test('results offer view, download, save-to and reveal, but never an inline HTML
   app.state.previewReady = true;
   app.state.pages = 1;
   app.updateActions();
-  const pending = app.runBuild('简历', 'overwrite', false);
+  const pending = app.runBuild('简历', 'overwrite');
   app.requests.shift().reply({
     basename: '简历',
     files: { pdf: '简历.pdf', png: '简历.png', html: '简历.html' },
@@ -532,9 +533,12 @@ test('generate dialog asks on conflict and sends the chosen policy', async () =>
   stat.reply({ name: 'resume', exists: true, conflict: 'resume.pdf', suggested: 'resume-2' });
   await flush();
 
-  const choice = kids(box).find((child) => child.className === 'dialog-choice');
-  assert.equal(choice.hidden, false);
-  const radios = kids(choice).map((item) => kids(item)[0]);
+  // 对话框里可能有两组单选（存到哪 / 撞名怎么办），所以按 radio 的 name 认，
+  // 不按"第几个 .dialog-choice"——后者在支持保存对话框的浏览器上会错位。
+  const conflict = kids(box).find((child) => child.className === 'dialog-choice'
+    && descendants(child).some((item) => item.name === 'if-exists'));
+  assert.equal(conflict.hidden, false);
+  const radios = descendants(conflict).filter((element) => element.type === 'radio');
   assert.deepEqual(radios.map((radio) => radio.value), ['rename', 'overwrite']);
   assert.equal(radios[0].checked, true, '默认应当是改名，不是覆盖');
   radios[1].checked = true;
@@ -740,6 +744,83 @@ test('save-to explains itself when the browser wants a fresh gesture', async () 
   await app.saveArtifactTo('简历.pdf');
   const banner = kids(app.el.banners).at(-1);
   assert.match(kids(banner)[0].textContent, /亲手点一下「另存到…」/);
+});
+
+test('generating straight to a picked location never touches the archive dir', async () => {
+  const app = await createApp();
+  const written = [];
+  fakePicker(app, written);
+  app.state.previewReady = true;
+  app.state.pages = 1;
+  app.state.content = structuredClone(info.example);
+  app.updateActions();
+
+  const pending = app.showBuildDialog();
+  await flush();
+  const box = kids(app.document.body).at(-1);
+  app.requests.shift().reply({ name: 'resume', exists: false, suggested: 'resume-2' });
+  await flush();
+
+  const where = descendants(box)
+    .filter((element) => element.type === 'radio' && element.name === 'deliver');
+  assert.deepEqual(where.map((radio) => radio.value), ['archive', 'pick']);
+  assert.equal(where[0].checked, true, '默认仍然是落存档目录，别悄悄换掉老习惯');
+  where[1].checked = true;
+  where[1].dispatch('change');
+  await flush();
+  // 换过去之后，那段说明必须自己讲清楚存档目录里不会留东西
+  const message = kids(box).find((child) => child.className === 'dialog-message');
+  assert.match(message.textContent, /不留副本/);
+
+  clickDialog(app, '生成');
+  await flush();
+  const render = app.requests.shift();
+  const body = JSON.parse(render.options.body);
+  assert.equal(body.deliver, 'pick');
+  assert.equal(body.if_exists, undefined, '不写存档目录，撞名策略就没有意义');
+  render.reply('PDF-BYTES');
+  await pending;
+
+  assert.equal(written.length, 1);
+  assert.equal(written[0].name, 'resume.pdf');
+  assert.ok(written[0].size > 0);
+  assert.equal(app.el.results.hidden, true, '存档目录里没有文件，就没有一行可列');
+  assert.match(app.el.toast.textContent, /已保存到 resume.pdf/);
+});
+
+test('cancelling the picker stops before anything gets rendered', async () => {
+  const app = await createApp();
+  app.window.showSaveFilePicker = async () => {
+    const error = new Error('The user aborted a request.');
+    error.name = 'AbortError';
+    throw error;
+  };
+  await app.runBuildToPick('resume');
+  // 先问落点再渲染，正是为了这个：取消了就不该白渲一遍 PDF
+  assert.equal(app.requests.length, 0);
+  assert.equal(app.el.banners.children.length, 0, '自己点了取消不该弹错');
+});
+
+test('a picked location left holding an empty file gets said out loud', async () => {
+  const app = await createApp();
+  const written = [];
+  fakePicker(app, written);
+  app.state.previewReady = true;
+  app.state.pages = 1;
+  app.updateActions();
+
+  const pending = app.runBuildToPick('resume');
+  await flush();
+  app.requests.shift().reply(
+    { error: '渲染出了 2 页，超过了设定的 1 页上限。', code: 'overflow', pages: 2 }, 422);
+  await pending;
+
+  assert.equal(written.length, 0, '没写成就别报已保存');
+  // 保存对话框在点确定那一刻就建好了文件，失败时那儿躺着个空壳，得交代一句
+  const note = kids(kids(app.el.banners).at(-1))[0].textContent;
+  assert.match(note, /超过了设定的 1 页上限/);
+  assert.match(note, /resume\.pdf 现在是个空文件/);
+  assert.equal(app.state.building, false);
 });
 
 test('save-to is offered only when the browser can pick a location', async () => {

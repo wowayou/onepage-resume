@@ -68,27 +68,34 @@ const state = {
 
 /* ---------- 接口 ---------- */
 
-/** 统一的请求包装：一律带 JSON 头，失败时把服务端的错误码和附加字段一起抛出来。
+/** 把一个失败的响应读成带 code / detail 的 Error。
  *
  * 服务端的错误体是 {"error": "给人看的话", "code": "machine_code", …}，
  * 除 error 外的字段（code、locations、pages、name…）挂在 error.detail 上，
  * 调用方想按错误码分支时用它，不必去解析文案。
+ *
+ * 从 api() 里单独拎出来，是因为不是每条接口都回 JSON：/api/render 在
+ * "只存到我选的位置"那条路上成功时直接回 PDF 字节，只有失败才回错误体。
+ * 那条路走不了 api()，但抛出来的东西必须和它一样，handleBuildError() 才认得。
  */
+async function apiError(response) {
+  const payload = await response.json().catch(() => ({}));
+  const error = new Error(payload.error || `${response.status} ${response.statusText}`);
+  error.status = response.status;
+  error.code = payload.code || null;
+  const { error: _message, ...rest } = payload;
+  error.detail = rest;
+  return error;
+}
+
+/** 统一的请求包装：一律带 JSON 头，失败时按上面那套抛出来。 */
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
     headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.error || `${response.status} ${response.statusText}`);
-    error.status = response.status;
-    error.code = payload.code || null;
-    const { error: _message, ...rest } = payload;
-    error.detail = rest;
-    throw error;
-  }
-  return payload;
+  if (!response.ok) throw await apiError(response);
+  return response.json().catch(() => ({}));
 }
 async function boot() {
   let info;
