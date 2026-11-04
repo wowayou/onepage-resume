@@ -3,7 +3,11 @@
 # 为什么要一份单独的：竖脊左边那列宽度是按"两个中文字"定死的（33pt）。
 # 英文栏目名 CAPABILITIES / EXPERIENCE 塞不进两个字的宽度，会逐字母折行。
 # 所以英文版把 rail 放宽、字号收小，其它（颜色、线宽、间距）一律走中文版。
+#
+# 英文内容文件里写一句 theme = "theme.en.toml"，命令行和网页就都会自动用这一份。
+# 栏目名还是放不下（比如 CERTIFICATIONS）时，生成前的版面检查会拦下来。
 extends = "theme.toml"
+lang = "en"
 
 [layout]
 rail = "68pt"          # 够放 EXPERIENCE 这个最长的栏目名

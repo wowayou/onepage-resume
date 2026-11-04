@@ -243,6 +243,24 @@ def effective_max_pages(content: dict) -> int:
     if value < 1:
         return DEFAULT_MAX_PAGES
     return min(value, MAX_PAGES_LIMIT)
+
+
+# 这份内容用哪套版式。版式和内容的语言是绑定的（英文栏目名放不进中文版式的竖脊
+# 左列），所以记在内容文件里，网页下拉和命令行才会自动选对，不靠人每次记得切。
+# 根级标量键，没写就是 DEFAULT_THEME；只收仓库目录里的 theme*.toml 文件名。
+THEME_KEY = "theme"
+DEFAULT_THEME = "theme.toml"
+THEME_NAME = re.compile(r"theme[A-Za-z0-9._-]*\.toml\Z")
+
+
+def effective_theme(content: dict) -> str:
+    """这份内容该用的版式文件名。没写（或写歪了）就回落到 DEFAULT_THEME。"""
+    value = content.get(THEME_KEY)
+    if isinstance(value, str) and THEME_NAME.match(value):
+        return value
+    return DEFAULT_THEME
+
+
 # 自定义板块的 key 与字段 key 都走这个：字母开头，字母数字下划线。
 IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
 
@@ -386,7 +404,7 @@ def find_type_errors(content: object) -> list[str]:
     errors: list[str] = []
     allowed = {block.key for block in BLOCKS}
     allowed.update(block.section_key for block in BLOCKS if block.section_key)
-    allowed.update((BODY_ORDER_KEY, CUSTOM_SECTIONS_KEY, MAX_PAGES_KEY))
+    allowed.update((BODY_ORDER_KEY, CUSTOM_SECTIONS_KEY, MAX_PAGES_KEY, THEME_KEY))
     for key in content.keys() - allowed:
         errors.append(f"未知内容块：{key}")
 
@@ -441,6 +459,7 @@ def find_type_errors(content: object) -> list[str]:
     _check_custom_sections(content, errors, check_table)
     _check_body_order(content, errors)
     _check_max_pages(content, errors)
+    _check_theme(content, errors)
     return errors
 
 
@@ -578,6 +597,16 @@ def _check_max_pages(content: dict, errors: list[str]) -> None:
     if not 1 <= value <= MAX_PAGES_LIMIT:
         errors.append(
             f"{MAX_PAGES_KEY} 必须在 1 到 {MAX_PAGES_LIMIT} 之间（现在是 {value}）。")
+
+
+def _check_theme(content: dict, errors: list[str]) -> None:
+    """theme 写了就必须是一个 theme*.toml 的纯文件名——不收路径，免得内容文件
+    把渲染指到仓库外面去。文件在不在由渲染那一步报，这里只管形状。"""
+    if THEME_KEY not in content:
+        return
+    value = content[THEME_KEY]
+    if not isinstance(value, str) or not THEME_NAME.match(value):
+        errors.append(f"{THEME_KEY} 必须是 theme*.toml 这样的文件名（现在是 {value!r}）。")
 
 
 def validate_types(content: object) -> None:

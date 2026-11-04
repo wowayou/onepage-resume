@@ -28,6 +28,9 @@ function schedule() {
   el.pages.className = 'stat';
   el.blanks.textContent = '空白 —';
   el.blanks.className = 'stat';
+  el.layout.textContent = '版面 —';
+  el.layout.className = 'stat';
+  el.layout.title = '';
   // 内容一变，上一次的生成结果就对不上了，先收起来
   el.results.textContent = '';
   el.results.hidden = true;
@@ -58,7 +61,8 @@ async function preview() {
       ? `显示前 ${result.shown_pages} 页，与 PDF 使用同一排版`
       : '未安装 pdftoppm，换行仅供参考；页数仍以 PDF 排版为准';
     state.previewReady = true;
-    showPages(result.pages);
+    showPages(result.pages, result.max_pages);
+    showLayout(result.overflows);
     showBlanks(result.blanks, result.locations);
     el.paper.classList.remove('stale');
     fitPaper();
@@ -77,15 +81,37 @@ async function preview() {
   }
 }
 
-function showPages(pages) {
+function showPages(pages, maxPages = 1) {
   state.pages = pages;
-  if (pages === 1) {
-    el.pages.textContent = '页数 1 ✓';
+  state.maxPages = maxPages || 1;
+  const limit = state.maxPages === 1 ? '' : ` / 上限 ${state.maxPages}`;
+  if (pages <= state.maxPages) {
+    el.pages.textContent = `页数 ${pages}${limit} ✓`;
     el.pages.className = 'stat good';
     return;
   }
-  el.pages.textContent = `页数 ${pages} ✗ 砍内容，别缩字号`;
+  el.pages.textContent = `页数 ${pages}${limit} ✗ 砍内容，别缩字号`;
   el.pages.className = 'stat bad';
+}
+
+/* 版面溢出：栏目名压到竖脊、长网址把栏撑出页边。页数和空白都对也可能是坏版面，
+   而且缩在预览里不一定看得出来，所以和页数一样摆在状态栏、一样挡住生成。 */
+
+function showLayout(overflows) {
+  state.overflows = overflows || [];
+  const count = state.overflows.length;
+  el.layout.textContent = count ? `版面 ${count} 处挤出 ✗` : '版面 ✓';
+  el.layout.className = count ? 'stat bad' : 'stat good';
+  el.layout.title = state.overflows.join('\n');
+}
+
+function showOverflows() {
+  if (!state.overflows.length) return;
+  dialog({
+    title: '这几处字挤出了自己那一栏',
+    message: state.overflows.join('\n'),
+    buttons: [{ label: '知道了', kind: 'primary' }],
+  });
 }
 
 function showBlanks(blanks, locations) {
@@ -155,7 +181,8 @@ function updateActions() {
     : state.building ? '正在生成 PDF'
       : !state.previewReady ? '等待当前内容预览校验'
         : state.blanks.length ? '还有空没填，补齐后才能出 PDF'
-          : state.pages !== 1 ? '内容超过一页，请先精简' : '';
+          : state.pages > state.maxPages ? '内容超过页数上限，请先精简'
+            : state.overflows.length ? '有字挤出了自己那一栏，点状态栏「版面」看是哪几处' : '';
   el.render.disabled = Boolean(reason);
   el.render.title = reason;
 }

@@ -140,10 +140,36 @@ async function maybeRestoreDraft(result) {
     return false;
   }
   state.content = draft.content;
+  syncThemePicker();
   state.dirty = true;
   el.save.classList.add('dirty');
   updateBadge();
   return true;
+}
+
+/* ---------- 版式跟着内容走 ---------- */
+/* 版式记在内容文件的 theme 键里：英文简历一旦选过 theme.en.toml，下次打开就还是它。
+   从前下拉每次启动都回到 theme.toml，英文栏目名就这么被压进了中文版式的窄左栏。 */
+
+/** 把下拉对到当前内容声明的版式。每次整份换掉 state.content 之后都要调。 */
+function syncThemePicker() {
+  const wanted = state.content.theme || state.defaultTheme;
+  if (state.themes.includes(wanted)) {
+    el.theme.value = wanted;
+    return;
+  }
+  // 内容点名的版式不在这里：预览先用默认版式，但不替用户改内容——说出来，让人自己选。
+  el.theme.value = state.defaultTheme;
+  banner(`这份内容指定的版式 ${wanted} 不存在，预览暂用 ${state.defaultTheme}。`
+         + '在「版式」里选一个并保存，就会改正过来。');
+}
+
+/** 用户在下拉里换了版式：记进内容，算一次没保存的改动。默认版式不写进文件。 */
+function changeTheme() {
+  if (!state.ready) return;
+  if (el.theme.value === state.defaultTheme) delete state.content.theme;
+  else state.content.theme = el.theme.value;
+  touched();
 }
 
 /* ---------- 打开 / 新建 ---------- */
@@ -171,6 +197,7 @@ async function confirmDiscard(what) {
 
 function applyLoaded(result) {
   state.content = result.content;
+  syncThemePicker();
   state.ready = true;
   state.contentVersion += 1;
   state.fileName = result.name;
@@ -228,6 +255,7 @@ async function newFile() {
     return;
   }
   state.content = emptyContent();
+  syncThemePicker();
   state.ready = true;
   state.contentVersion += 1;
   state.fileName = null;
@@ -454,6 +482,7 @@ async function showHistory() {
     const old = await api(`/api/history/read?name=${encodeURIComponent(state.fileName)}`
                           + `&id=${encodeURIComponent(label)}`);
     state.content = old.content;
+    syncThemePicker();
     state.contentVersion += 1;
     state.dirty = true;
     el.save.classList.add('dirty');

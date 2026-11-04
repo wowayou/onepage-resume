@@ -157,6 +157,10 @@ def shape(payload: dict) -> dict:
     if isinstance(pages, int) and not isinstance(pages, bool) \
             and pages != schema.DEFAULT_MAX_PAGES:
         content[schema.MAX_PAGES_KEY] = pages
+    # 版式同理：只在换离默认版式时才带过。形状不对的原样交给 validate_types 去报。
+    theme = payload.get(schema.THEME_KEY)
+    if theme is not None and theme != schema.DEFAULT_THEME:
+        content[schema.THEME_KEY] = theme
     return content
 
 
@@ -310,7 +314,9 @@ class Studio:
             result = {"html": markup, "pages": len(pages), "preview_mode": "html",
                       "width": pages[0].width + 24, "height": pages[0].height + 48,
                       "shown_pages": 1,
-                      "max_pages": schema.effective_max_pages(content)}
+                      "max_pages": schema.effective_max_pages(content),
+                      # 挤出栏的字：页数和空白都对也可能是坏版面，生成前就要摆出来
+                      "overflows": render.find_overflows(document)}
             if not shutil.which("pdftoppm"):
                 return result
             shown = pages[:PREVIEW_PAGE_LIMIT]
@@ -790,6 +796,9 @@ class Handler(BaseHTTPRequestHandler):
             except render.PageOverflow as error:
                 raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "overflow",
                                str(error), pages=error.pages) from error
+            except render.LayoutOverflow as error:
+                raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "layout",
+                               str(error), problems=error.problems) from error
             self.send_bytes(body, "application/pdf", download=f"{basename}.pdf")
             return
 
@@ -805,6 +814,9 @@ class Handler(BaseHTTPRequestHandler):
         except render.PageOverflow as error:    # 超过一页
             raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "overflow",
                            str(error), pages=error.pages) from error
+        except render.LayoutOverflow as error:  # 有字挤出了自己那一栏
+            raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "layout",
+                           str(error), problems=error.problems) from error
         except render.OutputExistsError as error:
             raise ApiError(HTTPStatus.CONFLICT, "exists", str(error),
                            name=error.name, suggested=error.suggested) from error

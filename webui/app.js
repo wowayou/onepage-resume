@@ -16,6 +16,7 @@ const el = {
   theme: document.getElementById('theme-name'),
   pages: document.getElementById('stat-pages'),
   blanks: document.getElementById('stat-blanks'),
+  layout: document.getElementById('stat-layout'),
   blankList: document.getElementById('blank-list'),
   file: document.getElementById('stat-file'),
   badge: document.getElementById('stat-badge'),
@@ -37,6 +38,7 @@ const state = {
   content: {},                  // 当前表单内容，形状与 content.toml 一致
   files: [],                    // 内容目录里的文件 [{name, writable, reason, extends}]
   themes: [],
+  defaultTheme: 'theme.toml',
   outDir: '',
   contentDir: '',
   dirty: false,                 // 有没有未保存的改动
@@ -51,6 +53,8 @@ const state = {
   previewReady: false,
   previewWidth: 794,
   pages: null,
+  maxPages: 1,                  // 这份内容允许几页（max_pages），以预览回来的为准
+  overflows: [],                // 挤出栏的字，每条一句说明
   blanks: [],                   // 空白的文字说明
   blankLocations: [],           // 同一批空的结构化位置，点着能跳过去
   blanksOpen: false,
@@ -113,6 +117,7 @@ async function boot() {
   state.defaultContentName = info.default_content_name;
   state.files = info.files;
   state.themes = info.themes;
+  state.defaultTheme = info.default_theme;
   state.outDir = info.out_dir;
   state.contentDir = info.content_dir;
 
@@ -164,10 +169,11 @@ el.save.addEventListener('click', saveFile);
 el.saveAs.addEventListener('click', saveAsFile);
 el.history.addEventListener('click', showHistory);
 el.render.addEventListener('click', showBuildDialog);
-el.theme.addEventListener('change', schedule);
+el.theme.addEventListener('change', changeTheme);
 el.sheet.addEventListener('load', fitPaper);
 el.help.addEventListener('click', showHelp);
 el.blanks.addEventListener('click', toggleBlankList);
+el.layout.addEventListener('click', showOverflows);
 window.addEventListener('resize', fitPaper);
 
 // Ctrl-S / ⌘-S 存盘，和编辑器里的手感一致

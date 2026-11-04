@@ -164,7 +164,7 @@ async function createApp() {
     + 'revealArtifact, canPickFiles, bodyOrder, blockRows, moveSection, '
     + 'deleteSection, restoreBuiltin, createCustomSection, customSections};', context);
   requests.shift().reply({
-    ...info, files: [], themes: ['theme.toml'],
+    ...info, files: [], themes: ['theme.toml', 'theme.en.toml'],
     default_theme: 'theme.toml', default_content: null,
     default_content_name: 'content.toml', out_dir: '/tmp/build',
     content_dir: '/tmp/content', png: true,
@@ -908,4 +908,89 @@ test('creating a custom section adds it to content, order, and the form', async 
   app.deleteSection(block);
   assert.equal([...app.customSections()].length, 0);
   assert.ok(![...app.bodyOrder()].some((token) => token.startsWith('custom:')));
+});
+
+test('the theme follows the content file, and switching it is an unsaved edit', async () => {
+  const app = await createApp();
+  const opening = app.openFile('content.en.toml');
+  await flush();
+  app.requests.shift().reply(contentReply({
+    name: 'content.en.toml', content: { ...structuredClone(info.example), theme: 'theme.en.toml' },
+  }));
+  await flush(10);
+  await opening;
+  assert.equal(app.el.theme.value, 'theme.en.toml', '打开英文内容就该选上它记着的版式');
+  assert.equal(app.state.dirty, false);
+
+  const previewing = app.preview();
+  const request = app.requests.shift();
+  assert.equal(JSON.parse(request.options.body).theme, 'theme.en.toml');
+  request.reply(previewResult());
+  await previewing;
+
+  app.el.theme.value = 'theme.toml';
+  app.el.theme.dispatch('change');
+  assert.equal(app.state.dirty, true, '换版式要算一次没保存的改动');
+  assert.equal('theme' in app.state.content, false, '默认版式不写进文件');
+  app.el.theme.value = 'theme.en.toml';
+  app.el.theme.dispatch('change');
+  assert.equal(app.state.content.theme, 'theme.en.toml');
+
+  const fresh = app.newFile();
+  await flush();
+  clickDialog(app, '放弃改动');
+  await fresh;
+  assert.equal(app.el.theme.value, 'theme.toml', '新建的空白简历回到默认版式');
+});
+
+test('a content file naming a missing theme previews with the default and says so', async () => {
+  const app = await createApp();
+  const opening = app.openFile('content.odd.toml');
+  await flush();
+  app.requests.shift().reply(contentReply({
+    name: 'content.odd.toml', content: { ...structuredClone(info.example), theme: 'theme.gone.toml' },
+  }));
+  await flush(10);
+  await opening;
+  assert.equal(app.el.theme.value, 'theme.toml');
+  assert.equal(app.state.content.theme, 'theme.gone.toml', '不替用户改内容');
+  assert.ok(kids(app.el.banners).some((bar) => /theme\.gone\.toml/.test(kids(bar)[0].textContent)));
+});
+
+test('text overflowing its column blocks PDF generation and can be listed', async () => {
+  const app = await createApp();
+  const problems = ['栏目名「EXPERIENCE」比左栏宽 45pt，压到了竖脊。'];
+  const pending = app.preview();
+  app.requests.shift().reply(previewResult({ overflows: problems }));
+  await pending;
+  assert.equal(app.el.render.disabled, true);
+  assert.match(app.el.render.title, /版面/);
+  assert.equal(app.el.layout.className, 'stat bad');
+  app.el.layout.dispatch('click');
+  const box = kids(app.document.body).at(-1);
+  assert.match(kids(box).map((child) => child.textContent).join('\n'), /EXPERIENCE/);
+  clickDialog(app, '知道了');
+
+  app.schedule();
+  const clean = app.preview();
+  app.requests.shift().reply(previewResult({ overflows: [] }));
+  await clean;
+  assert.equal(app.el.render.disabled, false);
+  assert.equal(app.el.layout.textContent, '版面 ✓');
+});
+
+test('the page check honours max_pages instead of assuming one page', async () => {
+  const app = await createApp();
+  const two = app.preview();
+  app.requests.shift().reply(previewResult({ pages: 2, max_pages: 2 }));
+  await two;
+  assert.equal(app.el.render.disabled, false, 'max_pages = 2 时两页是合格的');
+  assert.equal(app.el.pages.className, 'stat good');
+
+  app.schedule();
+  const three = app.preview();
+  app.requests.shift().reply(previewResult({ pages: 3, max_pages: 2 }));
+  await three;
+  assert.equal(app.el.render.disabled, true);
+  assert.equal(app.el.pages.className, 'stat bad');
 });

@@ -10,6 +10,9 @@
     python render.py                          # 用默认查找到的内容文件
     python render.py --theme theme.en.toml    # 英文版式（竖脊更宽、行距更紧）
     python render.py --content ~/private/me.toml --out-dir ~/private/build
+
+版式的选择顺序：--theme > 内容文件里的 theme = "…" > theme.toml。
+英文简历在内容文件里写一次 theme = "theme.en.toml"，以后就不用每次记得带参数。
 """
 
 from __future__ import annotations
@@ -25,9 +28,10 @@ import urllib.parse
 from pathlib import Path
 
 from weasyprint import HTML
+from weasyprint.formatting_structure import boxes
 
 import schema
-from content_io import DEFAULT_CONTENT_NAME, load_content, load_theme, plain_name
+from content_io import DEFAULT_CONTENT_NAME, load_content, load_theme, plain_name, safe_name
 
 HERE = Path(__file__).resolve().parent
 
@@ -37,7 +41,7 @@ HERE = Path(__file__).resolve().parent
 EXAMPLE_CONTENT = "content.example.toml"
 CONTENT_CANDIDATES = ("content.local.toml", DEFAULT_CONTENT_NAME, EXAMPLE_CONTENT)
 
-DEFAULT_THEME = HERE / "theme.toml"
+DEFAULT_THEME = HERE / schema.DEFAULT_THEME
 DEFAULT_CSS = HERE / "resume.css"
 DEFAULT_OUT_DIR = HERE / "build"
 
@@ -55,6 +59,18 @@ RENAME_LIMIT = 1000
 CJK_MARKERS = ("CJK", "Han", "YaHei", "SimSun", "SimHei", "PingFang", "Heiti", "Song", "Ming")
 
 WINDOWS_FONT_KEY = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+
+# 版式没写 lang 时的页面语言。写进 <html lang> 和 PDF 的 /Lang，
+# 读屏软件和文字提取都按它来，英文简历标成中文会被按中文读。
+DEFAULT_LANG = "zh-CN"
+LANG_TAG = re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*\Z")
+
+# 版面溢出检查的容差。WeasyPrint 的长度单位是 CSS px（1pt = 4/3 px）。
+# 栏目名用负 margin 抵掉末字字距，文字框会比栏宽多出零点几 pt，那不是溢出；
+# 再大就是字真的挤出了自己那一栏（压到竖脊、伸出页边）。
+PX_PER_PT = 4 / 3
+OVERFLOW_TOLERANCE = 1 * PX_PER_PT
+OVERFLOW_REPORT_LIMIT = 20
 
 
 def esc(value: object) -> str:
@@ -169,6 +185,14 @@ def build_root_css(theme: dict) -> str:
         f":root {{\n{declarations}\n}}\n\n"
         f"@page {{ size: {page['size']}; margin: {margin}; }}\n"
     )
+
+
+def theme_lang(theme: dict) -> str:
+    """版式声明的页面语言。不像语言标签的直接报错——它要原样写进 HTML。"""
+    value = theme.get("lang", DEFAULT_LANG)
+    if not isinstance(value, str) or not LANG_TAG.match(value):
+        raise ValueError(f"版式 lang 必须是 zh-CN、en 这样的语言标签（现在是 {value!r}）。")
+    return value
 
 
 # 面包屑里裸写的网址：github.com/账号/仓库、example.org/a/b/。要求首段带点、
@@ -372,7 +396,7 @@ class ResumeBuilder:
         rows = "".join(self.body_rows())
 
         return f"""<!doctype html>
-<html lang="zh-CN">
+<html lang="{esc(theme_lang(self.theme))}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -423,17 +447,98 @@ class PageOverflow(RuntimeError):
         self.limit = limit
 
 
+class LayoutOverflow(RuntimeError):
+    """有字挤出了自己那一栏。页数和空白都对，PDF 也照样生成得出来，
+    但栏目名压在正文上、网址伸出页边——这种 PDF 最容易被当成"成功了"发出去。"""
+
+    def __init__(self, problems: list[str]):
+        super().__init__(
+            f"版面有 {len(problems)} 处文字挤出了自己那一栏：\n"
+            + "\n".join(f"  {line}" for line in problems)
+        )
+        self.problems = problems
+
+
+def _is_rail(box) -> bool:
+    """这个盒子是不是竖脊左栏。元素是 ElementTree 节点，没有父指针，
+    所以"在不在左栏里"由 walk 往下传，不往上找。"""
+    element = getattr(box, "element", None)
+    return element is not None and "rail" in (element.get("class") or "").split()
+
+
+def find_overflows(document) -> list[str]:
+    """逐个文字框比对两条边界，越界超过容差的报出来：
+
+    - 它所在块的内容区：栏目名放不进左栏、压到竖脊上；
+    - 页面的内容区：断不开的长词会把整列撑宽（grid 的 1fr 按最长的词定下限），
+      这时所在块跟着变宽，只看块就看不出来，得看字有没有伸出页边。
+
+    只看文字、不看线：主线往左伸到竖脊、栏目名的记号压在竖脊上都是设计，
+    它们不是文字框。返回给人看的说明，空列表 = 版面干净。
+    """
+    problems: list[str] = []
+    seen: set[str] = set()
+    pushed: list[tuple[float, str]] = []     # 伸出版心的行：(越界量, 文字)
+
+    def report_rail(text: str, over: float) -> None:
+        if text in seen:
+            return
+        seen.add(text)
+        problems.append(
+            f"栏目名「{text}」比左栏宽 {over / PX_PER_PT:.0f}pt，压到了竖脊。"
+            "英文内容请把版式换成 theme.en.toml，或把栏目名改短。")
+
+    def walk(box, left: float, right: float, page: tuple[float, float],
+             rail: bool) -> None:
+        if isinstance(box, boxes.BlockContainerBox):
+            left = box.content_box_x()
+            right = left + box.width
+            rail = rail or _is_rail(box)
+        if isinstance(box, boxes.TextBox):
+            text = box.text.strip()
+            start, end = box.position_x, box.position_x + box.width
+            over = max(left - start, end - right, page[0] - start, end - page[1])
+            if text and over > OVERFLOW_TOLERANCE:
+                if rail:
+                    report_rail(text, over)
+                else:
+                    pushed.append((over, text))
+            return
+        for child in getattr(box, "children", None) or ():
+            walk(child, left, right, page, rail)
+
+    for page in document.pages:
+        root = page._page_box
+        area = (root.content_box_x(), root.content_box_x() + root.width)
+        walk(root, area[0], area[1], area, False)
+
+    # 一个断不开的长词会把整栏撑宽，同栏的正常句子跟着换行到新栏宽、一起伸出去。
+    # 栏宽就是按最长的那个词定的，所以伸得最远的那行就是祸首；只点它的名。
+    if pushed:
+        over, text = max(pushed)
+        shown = text if len(text) <= 40 else text[:40] + "…"
+        others = len({line for _, line in pushed} - {text})
+        tail = f"，另有 {others} 行跟着被挤出去" if others else ""
+        problems.append(
+            f"「{shown}」断不开，把所在栏撑出版心 {over / PX_PER_PT:.0f}pt{tail}。"
+            "给这个长词或网址加个空格，或改短。")
+    return problems[:OVERFLOW_REPORT_LIMIT]
+
+
 def render_pdf_bytes(markup: str, max_pages: int = 1) -> bytes:
     """渲染成 PDF 字节，一个文件都不写。
 
     网页端"只存到我选的位置"走这条：那份 PDF 的落点由浏览器的保存对话框决定，
-    中途不该在磁盘上先留一份副本。页数上限照查——那是这个工具唯一的硬承诺，
-    哪条路都不许绕过去。
+    中途不该在磁盘上先留一份副本。页数上限和版面溢出照查——那是这个工具的
+    硬承诺，哪条路都不许绕过去。
     """
     document = HTML(string=markup, base_url=str(HERE)).render()
     pages = len(document.pages)
     if pages > max_pages:
         raise PageOverflow(pages, max_pages)
+    problems = find_overflows(document)
+    if problems:
+        raise LayoutOverflow(problems)
     return document.write_pdf()
 
 
@@ -566,8 +671,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"内容 TOML 的路径。省略时按顺序查找 {' → '.join(CONTENT_CANDIDATES)}。"
              "真实简历建议放在本仓库之外，用这个参数指过来。",
     )
-    parser.add_argument("--theme", metavar="PATH", default=str(DEFAULT_THEME),
-                        help="设计令牌 TOML，默认 theme.toml。")
+    parser.add_argument("--theme", metavar="PATH",
+                        help="设计令牌 TOML。省略时用内容文件里的 theme，再默认 theme.toml。")
     parser.add_argument("--css", metavar="PATH", default=str(DEFAULT_CSS),
                         help="版式 CSS，默认 resume.css。")
     parser.add_argument("--out-dir", metavar="DIR", default=str(DEFAULT_OUT_DIR),
@@ -582,17 +687,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def resolve_theme(explicit: str | None, content: dict) -> Path:
+    """--theme 指定就用它（任意路径，和从前一样）；否则用内容文件里写的版式名，
+    在本仓库目录里找——内容文件只能点名仓库里的 theme*.toml，不能指到别处。"""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return safe_name(schema.effective_theme(content), "theme*.toml", HERE)
+
+
 def run(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     content_path = resolve_content(args.content)
-    theme_path = Path(args.theme).expanduser().resolve()
     css_path = Path(args.css).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
 
     content = load_content(content_path)
-    theme = load_theme(theme_path)
     validate_content(content, content_path)
+    theme_path = resolve_theme(args.theme, content)
+    theme = load_theme(theme_path)
     basename = resolve_basename(args.name, content)
     stylesheet = build_stylesheet(theme, css_path)
     check_fonts(theme)
@@ -604,6 +717,7 @@ def run(argv: list[str] | None = None) -> None:
               " 或用 --content 指定）", file=sys.stderr)
     else:
         print(f"内容: {content_path}")
+    print(f"版式: {theme_path.name}")
     print(f"HTML: {outputs['html']}")
     print(f"PDF:  {outputs['pdf']}")
     print(f"PNG:  {outputs['png']}" if outputs["png"]

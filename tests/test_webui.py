@@ -41,6 +41,14 @@ def example_content() -> dict:
         return tomllib.load(stream)
 
 
+def english_titles(content: dict) -> dict:
+    content["skills_section"]["title"] = "SKILLS"
+    content["experience_section"]["title"] = "EXPERIENCE"
+    content["projects_section"]["title"] = "PROJECTS"
+    content["education"]["title"] = "EDUCATION"
+    return content
+
+
 class DescribeTest(unittest.TestCase):
     """网页表单是照着 schema.describe() 长的，它得盖住全部字段。"""
 
@@ -94,6 +102,11 @@ class ShapeTest(unittest.TestCase):
         shaped = webui.shape({"experiences": [{"bullets": ["做了事", "  ", ""]}]})
         self.assertEqual(shaped["experiences"][0]["bullets"], ["做了事", "  ", ""])
         self.assertTrue(any("bullets[2]" in blank for blank in schema.find_blanks(shaped)))
+
+    def test_keeps_a_chosen_theme_but_not_the_default(self):
+        self.assertEqual(webui.shape({"theme": "theme.en.toml"})["theme"], "theme.en.toml")
+        self.assertNotIn("theme", webui.shape({"theme": "theme.toml"}))
+        self.assertNotIn("theme", webui.shape({}))
 
     def test_explicit_empty_section_title_is_not_replaced(self):
         shaped = webui.shape({"skills_section": {"title": ""}})
@@ -512,6 +525,42 @@ class PreviewApiTest(ServerTestCase):
             self.post("/api/preview",
                       {"content": example_content(), "theme": "../etc/theme.toml"})
         self.assertEqual(caught.exception.code, 400)
+
+    def test_preview_lists_text_that_overflows_its_column(self):
+        """英文栏目名配中文版式：页数 1、空白 0，但栏目名压在正文上。"""
+        content = english_titles(example_content())
+        _, clean = self.post("/api/preview", {"content": content, "theme": "theme.en.toml"})
+        self.assertEqual(clean["overflows"], [])
+        _, broken = self.post("/api/preview", {"content": content, "theme": "theme.toml"})
+        self.assertEqual((broken["pages"], broken["blanks"]), (1, []))
+        self.assertEqual(len(broken["overflows"]), 4)
+
+    def test_both_deliveries_refuse_an_overflowing_layout(self):
+        content = english_titles(example_content())
+        for deliver in ("archive", "pick"):
+            with self.subTest(deliver=deliver), \
+                    self.assertRaises(urllib.error.HTTPError) as caught:
+                self.post("/api/render", {"content": content, "theme": "theme.toml",
+                                          "deliver": deliver, "basename": "layout-check"})
+            self.assertEqual(caught.exception.code, 422)
+            body = json.loads(caught.exception.read())
+            self.assertEqual(body["code"], "layout")
+            self.assertEqual(len(body["problems"]), 4)
+        self.assertFalse((self.dir / "build" / "layout-check.pdf").exists())
+
+    def test_saved_theme_comes_back_when_the_file_is_reopened(self):
+        content = {**example_content(), "theme": "theme.en.toml", "max_pages": 2}
+        self.post("/api/save", {"name": "content.theme-bound.toml", "content": content})
+        _, loaded = self.json_get("/api/content?name=content.theme-bound.toml")
+        self.assertEqual(loaded["content"]["theme"], "theme.en.toml")
+        self.assertEqual(loaded["content"]["max_pages"], 2)
+
+    def test_a_bad_theme_name_cannot_be_saved(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/save", {"name": "content.bad-theme.toml",
+                                    "content": {**example_content(), "theme": "../x.toml"}})
+        self.assertEqual(caught.exception.code, 400)
+        self.assertFalse((self.dir / "content.bad-theme.toml").exists())
 
 
 class SaveApiTest(ServerTestCase):

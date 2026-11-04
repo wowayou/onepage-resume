@@ -46,8 +46,9 @@ function artifactUrl(name, inline) {
 
 async function showBuildDialog() {
   if (!state.ready || state.building) return;
-  if (!state.previewReady || state.blanks.length || state.pages !== 1) {
-    banner('先把内容改到一页、而且没有空白，再生成 PDF。');
+  if (!state.previewReady || state.blanks.length || state.pages > state.maxPages
+      || state.overflows.length) {
+    banner('先把内容改到页数上限以内、没有空白、版面也没有挤出的字，再生成 PDF。');
     return;
   }
 
@@ -284,7 +285,7 @@ function handleBuildError(error) {
            [{ label: '重新生成', onClick: () => showBuildDialog() }]);
     return;
   }
-  // 超页（overflow）等：服务端的文案已经说清了页数和该怎么办
+  // 超页（overflow）、版面挤出（layout）等：服务端的文案已经说清了哪里不对和该怎么办
   banner(error.message);
 }
 

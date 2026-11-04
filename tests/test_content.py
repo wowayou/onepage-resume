@@ -470,6 +470,139 @@ class RenderSafetyTest(FileTestCase):
                 render.write_outputs(self.content, self.theme, self.stylesheet, self.directory, name)
 
 
+def english_titles(content: dict) -> dict:
+    """把示例的栏目名换成英文——中文版式左栏只有两个中文字宽，这正是出过事的组合。"""
+    content = copy.deepcopy(content)
+    content["skills_section"]["title"] = "SKILLS"
+    content["experience_section"]["title"] = "EXPERIENCE"
+    content["projects_section"]["title"] = "PROJECTS"
+    content["education"]["title"] = "EDUCATION"
+    return content
+
+
+class LayoutOverflowTest(FileTestCase):
+    """页数和空白都对、字却挤出了自己那一栏的版面，要在生成前拦下。"""
+
+    def overflows(self, content: dict, theme_name: str) -> list[str]:
+        theme = render.load_theme(ROOT / theme_name)
+        markup = render.ResumeBuilder(
+            content, theme, render.build_stylesheet(theme, render.DEFAULT_CSS)).render_html()
+        return render.find_overflows(render.HTML(string=markup, base_url=str(ROOT)).render())
+
+    def test_clean_example_has_no_overflow_in_either_theme(self):
+        for theme_name in ("theme.toml", "theme.en.toml"):
+            with self.subTest(theme=theme_name):
+                self.assertEqual(self.overflows(self.content, theme_name), [])
+
+    def test_english_titles_in_the_chinese_theme_hit_the_spine(self):
+        problems = self.overflows(english_titles(self.content), "theme.toml")
+        self.assertEqual(len(problems), 4, problems)
+        self.assertTrue(all("theme.en.toml" in line for line in problems))
+        self.assertTrue(any("EXPERIENCE" in line for line in problems))
+
+    def test_english_titles_fit_the_english_theme(self):
+        self.assertEqual(self.overflows(english_titles(self.content), "theme.en.toml"), [])
+
+    def test_a_label_too_long_even_for_the_english_theme_is_caught(self):
+        content = english_titles(self.content)
+        content["projects_section"]["title"] = "CERTIFICATIONS"
+        problems = self.overflows(content, "theme.en.toml")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("CERTIFICATIONS", problems[0])
+
+    def test_an_unbreakable_url_names_only_the_culprit(self):
+        """长网址把整栏撑宽时，同栏的正常句子也会伸出页边；只点祸首的名。"""
+        content = copy.deepcopy(self.content)
+        content["projects"][0]["crumbs"] = ["example.com/" + "a" * 140]
+        problems = self.overflows(content, "theme.toml")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("aaaa", problems[0])
+
+    def test_overflowing_layout_refuses_to_write_and_keeps_old_artifacts(self):
+        for kind in ("html", "pdf", "png"):
+            (self.directory / f"resume.{kind}").write_bytes(b"previous")
+        theme = render.load_theme(render.DEFAULT_THEME)
+        stylesheet = render.build_stylesheet(theme, render.DEFAULT_CSS)
+        with self.assertRaises(render.LayoutOverflow) as caught:
+            render.write_outputs(english_titles(self.content), theme, stylesheet,
+                                 self.directory, "resume")
+        self.assertEqual(len(caught.exception.problems), 4)
+        for kind in ("html", "pdf", "png"):
+            self.assertEqual((self.directory / f"resume.{kind}").read_bytes(), b"previous")
+
+
+class ThemeBindingTest(FileTestCase):
+    """版式记在内容文件里，命令行和网页都照它选；页面语言跟着版式走。"""
+
+    def test_theme_and_max_pages_survive_a_save_round_trip(self):
+        content = copy.deepcopy(self.content)
+        content["theme"] = "theme.en.toml"
+        content["max_pages"] = 2
+        reloaded = tomllib.loads(fill.dump_toml(webui.shape(content)))
+        self.assertEqual(reloaded["theme"], "theme.en.toml")
+        self.assertEqual(reloaded["max_pages"], 2)
+        self.assertEqual(schema.find_type_errors(reloaded), [])
+
+    def test_defaults_are_not_written_back(self):
+        content = copy.deepcopy(self.content)
+        content["theme"] = "theme.toml"
+        content["max_pages"] = 1
+        text = fill.dump_toml(webui.shape(content))
+        self.assertNotIn("theme =", text)
+        self.assertNotIn("max_pages", text)
+
+    def test_theme_must_be_a_plain_theme_file_name(self):
+        for value in ("../theme.toml", "/tmp/theme.toml", "style.toml", "theme.en", 3):
+            with self.subTest(value=value):
+                errors = schema.find_type_errors({**self.content, "theme": value})
+                self.assertTrue(any("theme" in line for line in errors), errors)
+
+    def test_cli_uses_the_theme_named_in_the_content(self):
+        source = self.directory / "content.en.toml"
+        source.write_text('theme = "theme.en.toml"\n'
+                          + fill.dump_toml(english_titles(self.content)), encoding="utf-8")
+        out = self.directory / "cli-out"
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "render.py"), "--content", str(source),
+             "--out-dir", str(out), "--name", "en"],
+            capture_output=True, text=True, timeout=180)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("版式: theme.en.toml", result.stdout)
+        self.assertIn('<html lang="en">', (out / "en.html").read_text(encoding="utf-8"))
+
+        # --theme 仍然优先：硬换回中文版式就会撞上溢出检查，而且说清怎么办
+        forced = subprocess.run(
+            [sys.executable, str(ROOT / "render.py"), "--content", str(source),
+             "--theme", str(ROOT / "theme.toml"), "--out-dir", str(out), "--name", "zh"],
+            capture_output=True, text=True, timeout=180)
+        self.assertNotEqual(forced.returncode, 0)
+        self.assertIn("theme.en.toml", forced.stderr)
+        self.assertNotIn("Traceback", forced.stderr)
+        self.assertFalse((out / "zh.pdf").exists())
+
+    def test_page_language_follows_the_theme(self):
+        for theme_name, lang in (("theme.toml", "zh-CN"), ("theme.en.toml", "en")):
+            theme = render.load_theme(ROOT / theme_name)
+            markup = render.ResumeBuilder(self.content, theme, "").render_html()
+            with self.subTest(theme=theme_name):
+                self.assertIn(f'<html lang="{lang}">', markup)
+
+    def test_a_malformed_lang_is_refused_before_it_reaches_html(self):
+        theme = render.load_theme(ROOT / "theme.toml")
+        theme["lang"] = 'en"><script>'
+        with self.assertRaises(ValueError):
+            render.ResumeBuilder(self.content, theme, "").render_html()
+
+    def test_refilling_keeps_root_keys_the_form_does_not_ask_about(self):
+        existing = copy.deepcopy(self.content)
+        existing.update({"theme": "theme.en.toml", "max_pages": 2,
+                         "body_order": ["experiences", "skills", "projects", "education"]})
+        with mock.patch.object(fill, "ask_block",
+                               side_effect=lambda block, old, _: {block.key: old[block.key]}):
+            content = fill.collect(existing)
+        for key in ("theme", "max_pages", "body_order"):
+            self.assertEqual(content[key], existing[key])
+
 if __name__ == "__main__":
     unittest.main()
 

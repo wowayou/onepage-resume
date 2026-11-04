@@ -220,6 +220,11 @@ def collect(existing: dict) -> dict:
         content.update(ask_block(block, existing, f"[{number}/{total}]"))
     if "status" in existing.get("document", {}):
         content["document"]["status"] = existing["document"]["status"]
+    # 问卷只问内建块；根级键和自定义板块不在问卷里，原样带过，重填一遍不该把它们丢掉。
+    for key in (schema.BODY_ORDER_KEY, schema.CUSTOM_SECTIONS_KEY,
+                schema.MAX_PAGES_KEY, schema.THEME_KEY):
+        if key in existing:
+            content[key] = existing[key]
     return content
 
 
@@ -255,6 +260,20 @@ def dump_toml(content: dict) -> str:
     if isinstance(order, list):
         out.append("# 正文板块的顺序；删掉某个内建块名 = 不渲染它（数据仍留档）。")
         out.append(f"{schema.BODY_ORDER_KEY} = {render_value(order)}")
+        out.append("")
+
+    # 另外两个根级键同理：只在调离默认值时才写，老文件落盘不凭空多出它们。
+    # 少写了就会在网页里一保存就丢——max_pages 从前就是这么丢的。
+    theme = content.get(schema.THEME_KEY)
+    if isinstance(theme, str) and theme != schema.DEFAULT_THEME:
+        out.append("# 这份内容用哪套版式；英文简历用 theme.en.toml。")
+        out.append(f"{schema.THEME_KEY} = {render_value(theme)}")
+        out.append("")
+    pages = content.get(schema.MAX_PAGES_KEY)
+    if isinstance(pages, int) and not isinstance(pages, bool) \
+            and pages != schema.DEFAULT_MAX_PAGES:
+        out.append("# 页数上限，1..5。")
+        out.append(f"{schema.MAX_PAGES_KEY} = {pages}")
         out.append("")
 
     out += [

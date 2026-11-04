@@ -1,6 +1,9 @@
 # 设计令牌。每一项都会被写成 resume.css 里的 CSS 变量（--<键名>）。
 # 改这里就能整体调版式；改内容请改 content.toml；两者都不需要动 render.py。
 
+# 页面语言，写进 <html lang> 和 PDF 的 /Lang。读屏和文字提取按它判断语言。
+lang = "zh-CN"
+
 [fonts]
 # 正文西文优先用拉丁字体，中文再回落到 CJK 字体，西文间距更紧。
 sans = "'Noto Sans', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', sans-serif"
