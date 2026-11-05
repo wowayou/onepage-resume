@@ -34,11 +34,13 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import errno
 import ipaddress
 import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -62,6 +64,7 @@ WEB_DIR = HERE / "webui"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+BROWSER_COMMAND_TIMEOUT = 4   # WSL 最多两次尝试，加上打开延迟仍不超过约 10 秒。
 
 # 网页能读写的内容文件：与 .gitignore 的 content*.toml 同一批。
 # 这两个 glob 定义在 content_io.py，网页的文件闸门与继承路径闸门共用同一份。
@@ -382,6 +385,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "onepage-resume-webui"
     studio: Studio
     bind_host: str
+    launcher_id: str | None = None
 
     # 预览是防抖后连着来的，每条都打一行日志会把真正的错误埋掉。
     def log_message(self, fmt: str, *args) -> None:
@@ -509,7 +513,9 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             if self.command in ("GET", "HEAD"):
-                if path in ("/", "/index.html"):
+                if path == "/__launcher/ready" and self.command == "HEAD":
+                    self.launcher_ready()
+                elif path in ("/", "/index.html"):
                     self.static("index.html")
                 elif path == "/api/bootstrap":
                     self.bootstrap()
@@ -567,6 +573,18 @@ class Handler(BaseHTTPRequestHandler):
                       f"{type(error).__name__}: {error}", "internal")
 
     # ---- 各个接口 ----
+
+    def launcher_ready(self) -> None:
+        """启动器的实例识别，不是认证；只返回服务端保存的本次标识，不回显请求。"""
+        if self.launcher_id is None:
+            self.fail(HTTPStatus.NOT_FOUND, "没有这个地址。")
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("X-Onepage-Resume-Ready", f"v1;{self.launcher_id}")
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
 
     def static(self, name: str) -> None:
         path = (WEB_DIR / name).resolve()
@@ -852,6 +870,38 @@ def disposition(name: str, inline: bool = False) -> str:
 
 # ---------- 启动 ----------
 
+class ServerStartError(Exception):
+    """监听失败。由命令行入口报告，不把预期的环境错误变成 Python 堆栈。"""
+
+
+def _bind_error_message(host: str, port: int, error: OSError) -> str:
+    shown = f"[{host}]" if ":" in host else host
+    if isinstance(error, socket.gaierror):
+        reason = ("无法解析绑定地址。\n"
+                  "--host 应填写本机 IP 或主机名，不要带 http:// 或端口；"
+                  "只在本机使用时可改为 --host 127.0.0.1。")
+    elif error.errno == errno.EADDRINUSE:
+        reason = ("端口已被占用。\n"
+                  "若是之前启动的表单，请回到原终端按 Ctrl-C 后重试；"
+                  "不要直接停止未知进程。\n"
+                  "也可保留其它参数，改用 --port 9000 等其它端口，"
+                  "或 --port 0 让系统选择空闲端口。")
+    elif error.errno in (errno.EACCES, errno.EPERM):
+        reason = ("没有权限监听此地址或端口。\n"
+                  "请尝试 --port 0 或大于等于 1024 的其它端口，"
+                  "并检查系统的端口保留或权限设置；不要为此用 sudo 运行本服务。")
+    elif error.errno == errno.EADDRNOTAVAIL:
+        reason = ("绑定地址不属于本机或当前不可用。\n"
+                  "请检查 --host；只在本机使用时可改为 --host 127.0.0.1。")
+    elif error.errno in (errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT):
+        reason = ("系统不支持此地址类型。\n"
+                  "可尝试 --host 127.0.0.1 使用 IPv4。")
+    else:
+        # 未识别的系统错误仍保留原始原因和错误码，不能一律说成端口占用。
+        reason = str(error)
+    return f"无法启动网页表单（{shown}:{port}）：{reason}"
+
+
 def _in_wsl() -> bool:
     """在 WSL 里跑？WSL_DISTRO_NAME 是 WSL2 一定会设的。"""
     if os.environ.get("WSL_DISTRO_NAME"):
@@ -870,16 +920,23 @@ def _open_browser(url: str) -> bool:
     调 Windows 那边的浏览器，并且看退出码。
     """
     if _in_wsl():
-        # wslview（wslu 包）是首选；没装就退到 interop 里一定在的 powershell.exe。
-        if shutil.which("wslview"):
-            if subprocess.run(["wslview", url], check=False,
-                              capture_output=True).returncode == 0:
+        # 每个可用命令只试一次，异常/超时和非零退出一样都是「没打开」。
+        commands = (
+            ["wslview", url],
+            ["powershell.exe", "-NoProfile", "-Command", "Start-Process", url],
+        )
+        for argv in commands:
+            if not shutil.which(argv[0]):
+                continue
+            try:
+                result = subprocess.run(
+                    argv, check=False, capture_output=True,
+                    timeout=BROWSER_COMMAND_TIMEOUT,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if result.returncode == 0:
                 return True
-        if shutil.which("powershell.exe"):
-            return subprocess.run(
-                ["powershell.exe", "-NoProfile", "-Command", "Start-Process", url],
-                check=False, capture_output=True,
-            ).returncode == 0
         return False
     try:
         return webbrowser.open(url, new=2)
@@ -897,40 +954,59 @@ def _open_soon(url: str, delay: float = 0.6) -> None:
         print(f"没能自动打开浏览器，请手工访问：{url}", flush=True)
 
 
-def serve(host: str, port: int, studio: Studio, open_browser: bool = True) -> None:
-    handler = type("BoundHandler", (Handler,), {"studio": studio, "bind_host": host})
+def _watch_launcher_input(done: threading.Event) -> None:
+    """Windows 父启动器的 stdin 管道是生命线。EOF 时只取消当前 Python 进程。"""
+    try:
+        while os.read(sys.stdin.fileno(), 1):
+            pass
+    except OSError:
+        # 管道失效与父进程退出同样处理，不能留下无人管理的服务。
+        pass
+    if not done.is_set():
+        os.kill(os.getpid(), signal.SIGINT)
+
+
+def serve(host: str, port: int, studio: Studio, open_browser: bool = True, *,
+          launcher_id: str | None = None) -> None:
+    handler = type("BoundHandler", (Handler,), {
+        "studio": studio, "bind_host": host, "launcher_id": launcher_id,
+    })
     server_type = type("StudioServer", (ThreadingHTTPServer,), {
         "address_family": socket.AF_INET6 if ":" in host else socket.AF_INET,
     })
-    server = server_type((host, port), handler)
-    shown = f"[{host}]" if ":" in host else host
-    url = f"http://{shown}:{server.server_port}"
-
-    # flush：make ui 之类的场景 stdout 不是终端，缓冲会让这几行迟迟不出来，
-    # 而用户正等着这个网址。
-    print(f"填空表单：  {url}", flush=True)
-    print(f"内容目录：  {studio.content_dir}")
-    print(f"生成物：    {studio.out_dir}")
-    is_loopback = ipaddress.ip_address(server.server_address[0]).is_loopback
-    if not is_loopback:
-        print()
-        print("⚠️  警告：这个服务没有登录、没有口令，门禁就是「只听本机」。")
-        print(f"   现在绑在 {host}，同一网络里的任何人都能读到你的姓名、手机、"
-              "邮箱，也能写你的内容文件。")
-        print("   除非外面另有一层认证，请改回默认的 127.0.0.1。")
-    print()
-    # 只在本机回环地址上自动开浏览器；改成 --no-open 关掉（比如远程/无桌面环境）。
-    # 开成没开成由 _open_soon 自己报——它知道结果，这里还不知道。
-    if open_browser and is_loopback:
-        threading.Thread(target=_open_soon, args=(url,), daemon=True).start()
-    print("Ctrl-C 停止。", flush=True)
-
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n已停止。")
-    finally:
-        server.server_close()
+        server = server_type((host, port), handler)
+    except OSError as error:
+        raise ServerStartError(_bind_error_message(host, port, error)) from error
+
+    # 创建成功后的整段启动与运行都在资源边界内，打印或浏览器线程启动失败也关 socket。
+    with server:
+        shown = f"[{host}]" if ":" in host else host
+        url = f"http://{shown}:{server.server_port}"
+
+        # flush：make ui 之类的场景 stdout 不是终端，缓冲会让这几行迟迟不出来，
+        # 而用户正等着这个网址。
+        print(f"填空表单：  {url}", flush=True)
+        print(f"内容目录：  {studio.content_dir}")
+        print(f"生成物：    {studio.out_dir}")
+        is_loopback = ipaddress.ip_address(server.server_address[0]).is_loopback
+        if not is_loopback:
+            print()
+            print("⚠️  警告：这个服务没有登录、没有口令，门禁就是「只听本机」。")
+            print(f"   现在绑在 {host}，同一网络里的任何人都能读到你的姓名、手机、"
+                  "邮箱，也能写你的内容文件。")
+            print("   除非外面另有一层认证，请改回默认的 127.0.0.1。")
+        print()
+        # 只在本机回环地址上自动开浏览器；改成 --no-open 关掉（比如远程/无桌面环境）。
+        # 开成没开成由 _open_soon 自己报——它知道结果，这里还不知道。
+        if open_browser and is_loopback:
+            threading.Thread(target=_open_soon, args=(url,), daemon=True).start()
+        print("Ctrl-C 停止。", flush=True)
+
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n已停止。")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -942,7 +1018,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "改成 0.0.0.0 会把你的真实简历敞开给整个局域网，"
                              "而这个服务没有任何认证。")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
-                        help=f"端口，默认 {DEFAULT_PORT}。")
+                        help=f"端口，范围 0–65535，默认 {DEFAULT_PORT}。"
+                             "0 由系统选择空闲端口。")
     parser.add_argument("--content-dir", metavar="DIR", default=str(HERE),
                         help="内容文件所在目录，默认本仓库目录。"
                              "真实简历建议放仓库外，比如 ~/.private/resume。")
@@ -953,27 +1030,49 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-open", action="store_true",
                         help="不自动打开浏览器（比如远程、无桌面环境）。默认只在绑到 "
                              "127.0.0.1 时才自动开。")
-    return parser.parse_args(argv)
+    parser.add_argument("--launcher-id", help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    if (args.launcher_id is not None
+            and not re.fullmatch(r"[0-9a-f]{32}", args.launcher_id)):
+        parser.error("--launcher-id 必须是 32 位小写十六进制标识。")
+    if not args.host.strip():
+        parser.error("--host 不能为空，请填写 127.0.0.1 等本机地址。")
+    if not 0 <= args.port <= 65535:
+        parser.error("--port 必须在 0–65535 之间（0 由系统选择空闲端口）。")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+    launcher_done = threading.Event()
+    try:
+        args = parse_args(argv)
+        if args.launcher_id is not None:
+            threading.Thread(target=_watch_launcher_input,
+                             args=(launcher_done,), daemon=True).start()
+        content_dir = Path(args.content_dir).expanduser().resolve()
+        if not content_dir.is_dir():
+            raise ValueError(f"内容目录不存在：{content_dir}")
+        css_path = Path(args.css).expanduser().resolve()
+        if not css_path.is_file():
+            raise ValueError(f"版式 CSS 不存在：{css_path}")
 
-    content_dir = Path(args.content_dir).expanduser().resolve()
-    if not content_dir.is_dir():
-        raise SystemExit(f"错误：内容目录不存在：{content_dir}")
-    css_path = Path(args.css).expanduser().resolve()
-    if not css_path.is_file():
-        raise SystemExit(f"错误：版式 CSS 不存在：{css_path}")
-
-    studio = Studio(
-        content_dir=content_dir,
-        out_dir=Path(args.out_dir).expanduser().resolve(),
-        css_path=css_path,
-    )
-    # 字体缺失是最容易被忽略的失败模式，开服前先把话说在前面（和 render.py 一致）。
-    render.check_fonts(studio.theme(None))
-    serve(args.host, args.port, studio, open_browser=not args.no_open)
+        studio = Studio(
+            content_dir=content_dir,
+            out_dir=Path(args.out_dir).expanduser().resolve(),
+            css_path=css_path,
+        )
+        # 字体缺失是最容易被忽略的失败模式，开服前先把话说在前面（和 render.py 一致）。
+        render.check_fonts(studio.theme(None))
+        serve(args.host, args.port, studio, open_browser=not args.no_open,
+              launcher_id=args.launcher_id)
+    except KeyboardInterrupt:
+        print("\n启动已取消。", file=sys.stderr)
+        return 130
+    except (ServerStartError, ValueError, OSError, subprocess.SubprocessError) as error:
+        print(f"错误：{error}", file=sys.stderr)
+        return 1
+    finally:
+        launcher_done.set()
     return 0
 
 

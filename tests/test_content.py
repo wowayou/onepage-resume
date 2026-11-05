@@ -198,6 +198,41 @@ class SerializationTest(unittest.TestCase):
                 self.assertIn(field_name, field_keys, f"位置 {loc} 的 field 不在 {block_name} 里")
 
 
+class ThemeValidationTest(unittest.TestCase):
+    def test_inherited_theme_is_validated_after_merge_without_changing_values(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            base = directory / "theme.base.toml"
+            base.write_text(render.DEFAULT_THEME.read_text(encoding="utf-8"), encoding="utf-8")
+            child = directory / "theme.toml"
+            child.write_text('extends = "theme.base.toml"\n[fonts]\nserif = "serif"\n',
+                             encoding="utf-8")
+            theme = render.load_theme(child, allowed_dir=directory)
+            self.assertEqual(theme, content_io.load_theme(child, allowed_dir=directory))
+            self.assertEqual(theme["fonts"]["serif"], "serif")
+            self.assertTrue(theme["fonts"]["sans"])
+            self.assertEqual(theme["page"]["size"], "A4")
+
+    def test_font_validation_precedes_optional_system_font_scan(self):
+        for fonts in (None, [], "invalid", {}, {"sans": 12, "serif": "serif"},
+                      {"sans": "sans-serif", "serif": " "}):
+            with self.subTest(fonts=fonts), \
+                 mock.patch.object(render, "installed_font_names", return_value=None) as scan:
+                with self.assertRaisesRegex(ValueError, r"\[fonts\]"):
+                    render.check_fonts({"fonts": fonts})
+                scan.assert_not_called()
+
+    def test_font_scan_has_a_timeout_and_does_not_hide_timeout_failure(self):
+        with mock.patch.object(render.shutil, "which", return_value="/mock/fc-list"), \
+             mock.patch.object(render.subprocess, "run", return_value=subprocess.CompletedProcess(
+                 [], 0, stdout="Noto Sans CJK SC, Noto Serif CJK SC\n")) as run:
+            self.assertIn("Noto Sans CJK SC", render.installed_font_names())
+            self.assertEqual(run.call_args.kwargs["timeout"], 5)
+            run.side_effect = subprocess.TimeoutExpired(["fc-list"], timeout=5)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                render.installed_font_names()
+
+
 class FileTestCase(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

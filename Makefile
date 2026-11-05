@@ -76,7 +76,7 @@ bootstrap:
 	./scripts/bootstrap.sh
 
 # 可分发包：把 git HEAD 的跟踪文件打成 tar.gz（含 bootstrap.sh + Makefile + README
-# + start.cmd，端到端可自包含）。注意取的是已提交内容——改完没 commit 的不会进去。
+# + start.cmd + scripts/start-webui.ps1，端到端可自包含）。注意取的是已提交内容——改完没 commit 的不会进去。
 dist:
 	@mkdir -p dist
 	git archive --format=tar.gz --prefix=onepage-resume/ \

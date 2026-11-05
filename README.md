@@ -123,10 +123,13 @@ make ui        # 以后每次就这一条
 ```
 
 `make ui` 会自己去开 Windows 那边的浏览器（走 `wslview` 或 `powershell.exe`）。
-开不成它会把网址再打一遍，手工点开 `http://127.0.0.1:8765` 一样用。
+每个可用命令最多尝试一次、最多等 4 秒；异常或超时后仍可正常使用服务，并提示手工
+访问终端打印的网址（默认 `http://127.0.0.1:8765`）。
 
 **原生 Windows 用户**：装好 WSL2 + 一个 Ubuntu 发行版后，**双击仓库根目录的
-`start.cmd`** 即可——它会自动进 WSL 跑完上面三步，等端口通了再打开浏览器。
+`start.cmd`** 即可——仍会先自动进 WSL 准备环境，再由前台控制器启动服务。只有
+本次子进程仍在运行、且 Windows 收到本次服务的就绪标识时才打开浏览器，其他服务
+返回 HTTP 200 不算成功。服务启动及失败清理约限 30 秒，不包含前面的环境准备。
 仓库放在哪都行，两种位置它都认：
 
 - **在 WSL 里**（`\\wsl.localhost\<发行版>\home\...`，推荐、也更快）：它会把这个
@@ -138,13 +141,21 @@ make ui        # 以后每次就这一条
 
 走的是 WSL2 默认开着的 `localhostForwarding`；被关了的话见「排障」。
 
+启动后**保留当前控制台**，错误和日志会直接显示；按 **Q 或 Ctrl-C** 停止本次服务。
+关闭控制台也会结束本次启动的服务，不会按端口或进程名称终止其他程序。浏览器
+无法启动时会提示手工网址，服务仍保持可用。不要只关网页标签就以为服务停了。
+启动失败返回非零状态；`start.cmd /nopause` 只跳过收尾的按键等待，
+不会把服务变成后台任务。控制器仅对自己的 PowerShell 进程使用 Bypass（跳过脚本
+执行策略检查），不修改机器或用户的执行策略。
+
 ### 打一个可分发的包
 
 ```bash
 make dist      # 生成 dist/onepage-resume-<版本>.tar.gz
 ```
 
-内容取自 **git HEAD 的跟踪文件**（含 `bootstrap.sh`、`Makefile`、`README`、`start.cmd`），
+内容取自 **git HEAD 的跟踪文件**（含 `bootstrap.sh`、`Makefile`、`README`、`start.cmd`、
+`scripts/start-webui.ps1`），
 所以先把改动 commit 再打。它永远不会带上你的真实内容——`content*.toml` 和 `build/`
 本来就不进 Git，也不会进包。拿到包的人在另一台机器上 `make boot` 即可。
 
@@ -489,11 +500,15 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 - `render.py` —— 渲染程序。正常维护内容时不要编辑。
 - `scripts/bootstrap.sh` —— 开箱即用的一半：自动探测 apt / brew，把系统库和 CJK 字体
   装齐（缺才装）。被 `make boot` 调用，也能单独跑。
-- `start.cmd` —— 原生 Windows 的双击入口：检测到 WSL2 后，自动进默认发行版跑
-  `make boot`，起网页版，等端口通了再由 Windows 这边开浏览器。端口只在文件顶部的
+- `start.cmd` —— 原生 Windows 的双击入口：保留 WSL 探测、仓库路径解析与 `make boot`，
+  服务启动交给 `scripts/start-webui.ps1`，保存并返回其退出状态。端口只在文件顶部的
   `WEBUI_PORT` 里定义一次，改它要和 `webui.py` 的 `DEFAULT_PORT` 同步。
   **纯 ASCII + CRLF，提示是英文的**——cmd.exe 按控制台代码页解析 .cmd，中文字节会被
   错读成命令（见下面「排障」）。中文说明就在你正读的这份 README 里。跟踪。
+- `scripts/start-webui.ps1` —— Windows PowerShell 5.1 前台启动控制器：监督本次 WSL
+  子进程，同时读取 UTF-8 输出和错误；用实例标识校验就绪后才开浏览器。保留标准输入
+  管道作为父子进程的生命线，取消或退出时只清理本次服务，不生成后台日志文件。
+  就绪标识仅用于区分实例，**不是登录认证**；正常 `make ui` 不启用这套内部协议。
 - `.gitattributes` —— 钉住行尾：`.cmd` 检出成 CRLF，其余一律 LF。跟踪。
 - `webui/` —— 网页表单的静态文件，按"一件事一个文件"分：
   `ui.js`（对话框、提示条、横幅）、`form.js`（照着字段表长表单）、
@@ -504,6 +519,10 @@ git status      # 不该出现 content.toml / build/ 里的任何东西
 - `tests/` —— Python `unittest` 与 Node.js 内置测试器的回归测试，`make test` 跑。
   测试需要 Node.js 22+（CI 使用 24），日常填写和渲染不需要 Node.js，也不需要 npm 包。
   覆盖字段往返、保存冲突、继承/路径安全、真实 HTTP、单页渲染和浏览器异步状态。
+  启动回归还覆盖端口冲突、主题配置、取消、父进程退出和实例误判。Windows→WSL 控制器
+  集成测试仅在已有 WSL + Windows PowerShell 时运行，否则跳过；进程、管道、HTTP 与
+  退出码走真实控制器，浏览器调用和键盘取消使用替身，不执行 `start.cmd` 或 `make boot`。
+  PowerShell 脚本另有静态检查与辅助函数测试。
 - `examples/preview.png` —— README 顶部那张图，由 `make preview` 生成。跟踪。
 - `examples/preview.sha256` —— 上面那张图对应的输入哈希，`make check` 用它判断图是否
   过期。跟踪，由 `make preview` 写入，不要手改。
@@ -550,11 +569,23 @@ python webui.py [--host ADDR] [--port N] [--content-dir DIR]
                 [--out-dir DIR] [--css PATH] [--no-open]
 ```
 
-- `--host` 绑定地址，默认 `127.0.0.1`。**这个服务没有认证**，改成 `0.0.0.0`
+- `--host` 绑定地址，默认 `127.0.0.1`，不能留空。**这个服务没有认证**，改成 `0.0.0.0`
   等于把真实简历敞开给整个局域网；真要这么做，外面得自己套一层认证。
-- `--port` 端口，默认 `8765`。
+- `--port` 端口，范围 `0–65535`，默认 `8765`。显式传 `--port 0` 时由系统选择空闲
+  端口，终端提示和自动打开的浏览器使用实际端口。指定端口被占用时会说明原因和处理办法，
+  以非零状态退出，不自动换端口、不停止占用进程，也不会打开浏览器。
 - `--content-dir` 内容文件所在目录，默认本仓库目录。真实内容建议放仓库外。
 - `--out-dir` / `--css` 同 `render.py`。
+
+版式在继承合并后校验必需配置，包括 `[fonts].sans` / `serif` 的非空字符串，错误会
+定位到主题文件与字段，不会变成 `KeyError`。网页版在监听前只校验默认 `theme.toml`；
+其它版式在预览或生成时校验，出错作为请求错误返回，不会停掉已运行的服务。
+`render.py` 在渲染前校验本次选用的版式。
+
+`webui.py` 的退出状态：参数错误为 `2`，常见启动环境错误为 `1`；启动阶段按 Ctrl-C
+取消为 `130`，服务运行中按 Ctrl-C 正常停止为 `0`。`start.cmd` 前置检查失败返回 `1`，
+否则返回控制器的状态：就绪前子进程退出一律为 `1`，启动中取消为 `130`，运行中
+按 Q / Ctrl-C 停止为 `0`。
 
 ---
 
@@ -719,6 +750,9 @@ max_pages = 2          # 根级键，1..5，默认 1
 | 打印"虚构示例" | 没找到你的内容文件 | 检查文件名，或用 `--content` 指定 |
 | 没有 PNG | 缺 `pdftoppm` | `sudo apt install poppler-utils` |
 | 字重不对 / 伪粗体 | 回落到了 SimSun | 装 Noto Serif CJK SC，或直接用 WSL2 |
+| `make ui` 提示「端口已被占用」（原报错 `Address already in use`） | 之前的服务还没停止，或其它程序占用了指定端口 | 若确认是之前启动的表单，回原终端按 Ctrl-C；否则用 `.venv/bin/python webui.py --port 0` 选空闲端口，或用 `--port 9000` 等指定其它端口。保留原有的目录等参数，不要直接停止未知进程 |
+| 网页版启动提示「没有权限监听此地址或端口」 | 低端口权限限制，或系统保留/限制了该端口 | 尝试 `--port 0` 或大于等于 1024 的其它端口，并检查端口保留和权限设置；不要为此用 sudo 运行服务 |
+| 网页版启动提示「无法解析绑定地址」或「绑定地址不属于本机」 | `--host` 拼写错误、带了协议/端口，或不是本机可用地址 | 本机使用时改为 `--host 127.0.0.1`；不要为了绕过错误改成 `0.0.0.0` |
 | 网页版 `Host 头不被接受` | 用了 127.0.0.1 之外的域名进来（防 DNS 重绑定） | 用 `http://127.0.0.1:<端口>` 打开 |
 | 网页版存不了，徽标写着"只读" | 打开的是那份示例，或者是一份定制版（`extends`） | 用「另存为…」存成 `content.<公司>.toml`；定制版请手工编辑那十几行 |
 | 网页版保存被拒，提示"被改过" | 同一份文件被另一个窗口或编辑器改过 | 横幅上就地两个选择：重新读取（丢掉我的改动）或另存为。没有"强制覆盖" |
@@ -730,7 +764,10 @@ max_pages = 2          # 根级键，1..5，默认 1
 | `[keep] … 里写了 X，但被继承的那份里没有这一条` | 基底改了名字，定制版没跟上 | 按报错里列出的可选值改；这正是它该拦住的事 |
 | `是定制版（extends = …）` | 想用 `fill.py` 或网页版改定制版 | 直接编辑那十几行；查空白用 `fill.py --check` |
 | WSL2 里开了服务，Windows 打不开 | `localhostForwarding` 被关了（默认是开的） | 在 `%UserProfile%\.wslconfig` 里写 `[wsl2]` + `localhostForwarding=true`，再 `wsl --shutdown` 重开 |
-| WSL 里 `make ui` 没弹出浏览器 | 发行版里没有 Linux 浏览器，也没装 `wslu` | 它会退到 `powershell.exe` 去开 Windows 默认浏览器；两条都不成时按提示手工打开那个网址 |
+| WSL 里 `make ui` 没弹出浏览器 | 缺启动命令，或命令失效、权限不足、超时 | 可用的 `wslview` / `powershell.exe` 各最多尝试一次、等 4 秒；失败不影响服务，按提示手工访问网址 |
+| 启动提示 `theme.toml：… [fonts].sans / serif …` | 主题缺少必需字段，或字段不是非空字符串 | 按提示补齐字体栈；继承版式只需保证合并后的配置完整，不必抄整份主题 |
+| `start.cmd` 提示 `Child exited before readiness` | 本次 Python 启动失败或提前退出 | 看同一控制台显示的具体原因；占用端口时不会自动复用其他服务或打开它 |
+| `start.cmd` 提示 `Startup timed out` 或就绪标识不匹配 | Windows 无法访问本次 WSL 服务，或端口转发指向另一服务 | 检查 `localhostForwarding` 和占用者；不要仅凭首页返回 HTTP 200 判定本次启动成功 |
 | 双击 `start.cmd` 满屏 `'xxx' 不是内部或外部命令` | 文件被改成了 UTF-8 中文或 LF 行尾。cmd.exe 按 CP936 解析，GBK 前导字节会吃掉换行，下一行被当命令跑；LF 还会让 `goto` 找不到标签 | 保持纯 ASCII + CRLF——`.gitattributes` 和 `make test` 都会管住。别在里面写中文，写在 README 里 |
 | `start.cmd` 说 `No Makefile next to this script` | 双击的是一份被拷到别处（桌面 / 下载）的 `start.cmd`。它只能在仓库根目录、和 `Makefile` 并排时用 | 回仓库根目录双击；或直接在 WSL 里 `make boot && make ui` |
 | `WSL_E_DISTRO_NOT_FOUND` | 发行版名被带引号传给了 `wsl -d`，引号会算进名字里 | `-d` 后面不要加引号（`start.cmd` 里已按这个写）|

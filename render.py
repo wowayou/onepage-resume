@@ -31,7 +31,8 @@ from weasyprint import HTML
 from weasyprint.formatting_structure import boxes
 
 import schema
-from content_io import DEFAULT_CONTENT_NAME, load_content, load_theme, plain_name, safe_name
+from content_io import DEFAULT_CONTENT_NAME, load_content, plain_name, safe_name
+from content_io import load_theme as _load_theme
 
 HERE = Path(__file__).resolve().parent
 
@@ -105,11 +106,35 @@ def stack_families(stack: str) -> list[str]:
     return families
 
 
+def _font_stacks(theme: dict) -> dict:
+    fonts = theme.get("fonts")
+    if not isinstance(fonts, dict):
+        raise ValueError("版式缺少有效的 [fonts] 表。")
+    for role in ("sans", "serif"):
+        if not isinstance(fonts.get(role), str) or not fonts[role].strip():
+            raise ValueError(f"版式 [fonts].{role} 必须是非空的字体栈字符串。")
+    return fonts
+
+
+def load_theme(path: Path, seen: tuple[Path, ...] = (), *,
+               allowed_dir: Path | None = None) -> dict:
+    """继承合并后校验，半份子版式仍可继承完整配置；错误定位到加载的文件。"""
+    theme = _load_theme(path, seen, allowed_dir=allowed_dir)
+    try:
+        _font_stacks(theme)
+        build_root_css(theme)
+        theme_lang(theme)
+    except ValueError as error:
+        raise ValueError(f"{path.name}：{error}") from error
+    return theme
+
+
 def installed_font_names() -> list[str] | None:
     """系统里已安装的字体名。查不到就返回 None——宁可跳过检查，也不误报。"""
     if shutil.which("fc-list"):  # Linux、macOS、MSYS2
         result = subprocess.run(
-            ["fc-list", ":", "family"], capture_output=True, text=True, check=False
+            ["fc-list", ":", "family"], capture_output=True, text=True, check=False,
+            timeout=5,
         )
         if result.returncode == 0:
             return [
@@ -142,6 +167,7 @@ def check_fonts(theme: dict) -> None:
     注册表里的名字是显示名（例如 “Microsoft YaHei & Microsoft YaHei UI”），
     所以用包含匹配而不是相等匹配。
     """
+    fonts = _font_stacks(theme)
     installed = installed_font_names()
     if installed is None:
         print("提示：查不到系统字体清单，跳过字体检查。若 PDF 里中文是方块，装 Noto Sans CJK SC。")
@@ -150,7 +176,7 @@ def check_fonts(theme: dict) -> None:
     def available(family: str) -> bool:
         return any(family.lower() in name.lower() for name in installed)
 
-    for role, stack in (("正文", theme["fonts"]["sans"]), ("标题", theme["fonts"]["serif"])):
+    for role, stack in (("正文", fonts["sans"]), ("标题", fonts["serif"])):
         cjk = [f for f in stack_families(stack) if any(m in f for m in CJK_MARKERS)]
         found = [f for f in cjk if available(f)]
         if not found:
@@ -169,7 +195,8 @@ def build_root_css(theme: dict) -> str:
             variables[key] = str(value)
 
     page = theme.get("page")
-    if not isinstance(page, dict) or page.get("size") not in PAPER_SIZES:
+    if (not isinstance(page, dict) or not isinstance(page.get("size"), str)
+            or page["size"] not in PAPER_SIZES):
         raise ValueError("版式 [page] size 只支持 A4 或 Letter。")
     for key in ("margin-top", "margin-side", "margin-bottom"):
         if not isinstance(page.get(key), str) or not page[key].strip():

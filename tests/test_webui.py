@@ -11,7 +11,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import io
 import json
+import socket
 import subprocess
 import sys
 import tempfile
@@ -306,6 +310,288 @@ class OpenBrowserTest(unittest.TestCase):
         with mock.patch.object(webui, "_in_wsl", return_value=False), \
              mock.patch.object(webui.webbrowser, "open", side_effect=OSError("no display")):
             self.assertFalse(webui._open_browser(self.URL))
+
+
+    def test_wsl_opener_exceptions_are_bounded_and_report_manual_url_without_traceback(self):
+        failures = (
+            FileNotFoundError(errno.ENOENT, "opener disappeared"),
+            PermissionError(errno.EACCES, "interop denied"),
+            subprocess.TimeoutExpired(["wslview", self.URL], timeout=4),
+        )
+        for failure in failures:
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with self.subTest(failure=failure), \
+                 mock.patch.object(webui, "_in_wsl", return_value=True), \
+                 mock.patch.object(webui.shutil, "which", return_value="/mock/opener"), \
+                 mock.patch.object(webui.subprocess, "run", side_effect=failure) as run, \
+                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                worker = threading.Thread(target=webui._open_soon, args=(self.URL, 0), daemon=True)
+                worker.start()
+                worker.join(timeout=2)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn(f"请手工访问：{self.URL}", stdout.getvalue())
+            self.assertEqual(run.call_count, 2)
+            self.assertLessEqual(2 * webui.BROWSER_COMMAND_TIMEOUT + 0.6, 10)
+            for call in run.call_args_list:
+                self.assertEqual(call.kwargs["timeout"], webui.BROWSER_COMMAND_TIMEOUT)
+
+    def test_wsl_exception_can_fall_back_to_one_successful_powershell_attempt(self):
+        with mock.patch.object(webui, "_in_wsl", return_value=True), \
+             mock.patch.object(webui.shutil, "which", return_value="/mock/opener"), \
+             mock.patch.object(webui.subprocess, "run", side_effect=[
+                 OSError("wslview unavailable"), subprocess.CompletedProcess([], 0),
+             ]) as run:
+            self.assertTrue(webui._open_browser(self.URL))
+        self.assertEqual([call.args[0][0] for call in run.call_args_list],
+                         ["wslview", "powershell.exe"])
+
+    def test_wsl_programming_errors_are_not_disguised_as_opener_failures(self):
+        with mock.patch.object(webui, "_in_wsl", return_value=True), \
+             mock.patch.object(webui.shutil, "which", return_value="/mock/opener"), \
+             mock.patch.object(webui.subprocess, "run", side_effect=TypeError("bug")):
+            with self.assertRaisesRegex(TypeError, "bug"):
+                webui._open_browser(self.URL)
+
+
+class StartupTest(unittest.TestCase):
+    """环境和参数错误要可操作、非零退出；监听失败不能假装开服或自动重试。"""
+
+    def setUp(self):
+        patcher = mock.patch.object(webui.render, "check_fonts")
+        self.check_fonts = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def call_main(self, argv):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = webui.main(argv)
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_port_defaults_and_boundaries(self):
+        self.assertEqual(webui.parse_args([]).port, webui.DEFAULT_PORT)
+        for port in (0, 1, 65535):
+            with self.subTest(port=port):
+                self.assertEqual(webui.parse_args(["--port", str(port)]).port, port)
+
+    def test_invalid_ports_are_usage_errors_before_startup(self):
+        with mock.patch.object(webui, "serve") as serve:
+            for port in ("-1", "65536", "99999999999999999999", "abc"):
+                stderr = io.StringIO()
+                with self.subTest(port=port), contextlib.redirect_stderr(stderr), \
+                     self.assertRaises(SystemExit) as caught:
+                    webui.main(["--port", port])
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn("--port", stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+        self.check_fonts.assert_not_called()
+        serve.assert_not_called()
+
+    def test_empty_host_is_rejected_instead_of_binding_all_interfaces(self):
+        with mock.patch.object(webui, "serve") as serve:
+            for host in ("", "   "):
+                stderr = io.StringIO()
+                with self.subTest(host=host), contextlib.redirect_stderr(stderr), \
+                     self.assertRaises(SystemExit) as caught:
+                    webui.main(["--host", host])
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn("--host 不能为空", stderr.getvalue())
+        serve.assert_not_called()
+
+    def test_bind_errors_are_reported_once_without_starting_browser(self):
+        cases = [
+            ("127.0.0.1", OSError(errno.EADDRINUSE, "Address already in use"),
+             ("端口已被占用", "Ctrl-C", "--port 0")),
+            ("127.0.0.1", PermissionError(errno.EACCES, "Permission denied"),
+             ("没有权限", "1024")),
+            ("127.0.0.1", OSError(errno.EPERM, "Operation not permitted"),
+             ("没有权限", "1024")),
+            ("192.0.2.1", OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address"),
+             ("绑定地址不属于本机", "--host 127.0.0.1")),
+            ("bad.invalid", socket.gaierror(socket.EAI_NONAME, "Name or service not known"),
+             ("无法解析绑定地址", "--host")),
+            ("::1", OSError(errno.EAFNOSUPPORT, "Address family not supported"),
+             ("系统不支持此地址类型", "IPv4")),
+            ("::1", OSError(errno.EPROTONOSUPPORT, "Protocol not supported"),
+             ("系统不支持此地址类型", "IPv4")),
+            ("127.0.0.1", OSError(errno.EMFILE, "Too many open files"),
+             ("[Errno", "Too many open files")),
+        ]
+        for host, error, messages in cases:
+            with self.subTest(host=host, error=error), \
+                 mock.patch.object(webui.ThreadingHTTPServer, "__init__",
+                                   side_effect=error) as constructor, \
+                 mock.patch.object(webui.threading, "Thread") as browser_thread:
+                code, stdout, stderr = self.call_main(["--host", host, "--port", "8765"])
+                self.assertEqual(code, 1)
+                shown = f"[{host}]" if ":" in host else host
+                self.assertIn(f"{shown}:8765", stderr)
+                for message in messages:
+                    self.assertIn(message, stderr)
+                self.assertNotIn("Traceback", stderr)
+                self.assertNotIn("填空表单：", stdout)
+                self.assertNotIn("Ctrl-C 停止", stdout)
+                constructor.assert_called_once()
+                browser_thread.assert_not_called()
+
+    def test_missing_paths_are_reported_before_binding(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+             mock.patch.object(webui, "serve") as serve:
+            missing = str(Path(temporary) / "missing")
+            for option, message in (("--content-dir", "内容目录不存在"),
+                                    ("--css", "版式 CSS 不存在")):
+                with self.subTest(option=option):
+                    code, _, stderr = self.call_main([option, missing])
+                    self.assertEqual(code, 1)
+                    self.assertIn(message, stderr)
+                    self.assertIn(missing, stderr)
+        self.check_fonts.assert_not_called()
+        serve.assert_not_called()
+
+    def test_real_bad_theme_files_are_rejected_with_filename_and_field(self):
+        original = render.DEFAULT_THEME.read_text(encoding="utf-8")
+        cases = (
+            ("", "[fonts]"),
+            ('fonts = "invalid"\n', "[fonts]"),
+            ('[fonts]\nserif = "serif"\n', "[fonts].sans"),
+            ('[fonts]\nsans = 123\nserif = "serif"\n', "[fonts].sans"),
+            ('[fonts]\nsans = "sans-serif"\nserif = []\n', "[fonts].serif"),
+            ('[fonts]\nsans = "sans-serif"\nserif = "  "\n', "[fonts].serif"),
+            (original.replace('size = "A4"', 'size = ["A4"]'), "[page]"),
+            (original.replace('lang = "zh-CN"', 'lang = 12'), "lang"),
+            ("[fonts\n", "TOML"),
+        )
+        with tempfile.TemporaryDirectory() as temporary, \
+             mock.patch.object(webui, "HERE", Path(temporary)), \
+             mock.patch.object(webui, "serve") as serve:
+            path = Path(temporary) / "theme.toml"
+            for text, message in cases:
+                with self.subTest(message=message, text=text[:60]):
+                    path.write_text(text, encoding="utf-8")
+                    code, _, stderr = self.call_main(["--no-open"])
+                    self.assertEqual(code, 1)
+                    self.assertIn("theme.toml", stderr)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn("Traceback", stderr)
+        self.check_fonts.assert_not_called()
+        serve.assert_not_called()
+
+    def test_theme_and_font_check_failures_are_reported_before_binding(self):
+        with mock.patch.object(webui, "serve") as serve:
+            with mock.patch.object(webui.Studio, "theme", side_effect=ValueError("版式无效")):
+                code, _, stderr = self.call_main([])
+                self.assertEqual(code, 1)
+                self.assertIn("版式无效", stderr)
+            for error in (OSError(errno.EACCES, "fc-list denied"),
+                          subprocess.CalledProcessError(1, ["fc-list"]),
+                          subprocess.TimeoutExpired(["fc-list"], timeout=5)):
+                with self.subTest(error=error):
+                    self.check_fonts.side_effect = error
+                    code, _, stderr = self.call_main([])
+                    self.assertEqual(code, 1)
+                    self.assertIn(str(error), stderr)
+        serve.assert_not_called()
+
+    def test_occupied_port_in_real_cli_has_no_traceback(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen(1)
+            host, port = occupied.getsockname()
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "webui.py"), "--port", str(port), "--no-open"],
+                cwd=ROOT, capture_output=True, text=True, check=False, timeout=20,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(f"{host}:{port}", result.stderr)
+            self.assertIn("端口已被占用", result.stderr)
+            self.assertIn("--port 0", result.stderr)
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertNotIn("填空表单：", result.stdout)
+            # 原监听者还在，启动失败不能自动抢占或终止它。
+            with socket.create_connection((host, port), timeout=2):
+                pass
+
+    def test_startup_interrupts_return_130_before_binding(self):
+        with mock.patch.object(webui, "serve") as serve:
+            self.check_fonts.side_effect = KeyboardInterrupt
+            code, _, stderr = self.call_main([])
+            self.assertEqual(code, 130)
+            self.assertIn("启动已取消", stderr)
+            self.assertNotIn("Traceback", stderr)
+            with mock.patch.object(webui, "parse_args", side_effect=KeyboardInterrupt):
+                self.assertEqual(self.call_main([])[0], 130)
+        serve.assert_not_called()
+
+    def test_interrupt_after_binding_but_before_serving_releases_socket(self):
+        closed = []
+        original_close = ThreadingHTTPServer.server_close
+
+        def close(server):
+            original_close(server)
+            closed.append(server)
+
+        with mock.patch.object(webui.ThreadingHTTPServer, "server_close",
+                               autospec=True, side_effect=close), \
+             mock.patch.object(webui.threading, "Thread") as browser_thread:
+            browser_thread.return_value.start.side_effect = KeyboardInterrupt
+            code, _, stderr = self.call_main(["--port", "0"])
+        self.assertEqual(code, 130)
+        self.assertIn("启动已取消", stderr)
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0].socket.fileno(), -1)
+
+    def test_launcher_id_is_validated_without_weakening_argument_errors(self):
+        self.assertEqual(webui.parse_args(["--launcher-id", "a" * 32]).launcher_id, "a" * 32)
+        for value in ("", "a" * 31, "a" * 33, "A" * 32, "x" * 32, "a" * 32 + "\r\n"):
+            with self.subTest(value=value), contextlib.redirect_stderr(io.StringIO()), \
+                 self.assertRaises(SystemExit) as caught:
+                webui.main(["--launcher-id", value])
+            self.assertEqual(caught.exception.code, 2)
+        self.check_fonts.assert_not_called()
+
+    def test_port_zero_uses_actual_port_for_url_and_closes_on_interrupt(self):
+        closed = []
+        original_close = ThreadingHTTPServer.server_close
+
+        def close(server):
+            original_close(server)
+            closed.append(server)
+
+        with mock.patch.object(webui.ThreadingHTTPServer, "serve_forever",
+                               side_effect=KeyboardInterrupt), \
+             mock.patch.object(webui.ThreadingHTTPServer, "server_close",
+                               autospec=True, side_effect=close), \
+             mock.patch.object(webui.threading, "Thread") as browser_thread:
+            code, stdout, stderr = self.call_main(["--port", "0"])
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(len(closed), 1)
+        server = closed[0]
+        self.assertGreater(server.server_port, 0)
+        url = f"http://127.0.0.1:{server.server_port}"
+        self.assertIn(url, stdout)
+        self.assertIn("已停止", stdout)
+        self.assertEqual(server.socket.fileno(), -1)
+        browser_thread.assert_called_once_with(
+            target=webui._open_soon, args=(url,), daemon=True)
+        browser_thread.return_value.start.assert_called_once()
+
+    def test_browser_thread_start_failure_closes_socket_and_is_not_hidden(self):
+        closed = []
+        original_close = ThreadingHTTPServer.server_close
+
+        def close(server):
+            original_close(server)
+            closed.append(server)
+
+        with mock.patch.object(webui.ThreadingHTTPServer, "server_close",
+                               autospec=True, side_effect=close), \
+             mock.patch.object(webui.threading, "Thread") as browser_thread:
+            browser_thread.return_value.start.side_effect = RuntimeError("thread start failed")
+            with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                self.call_main(["--port", "0"])
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0].socket.fileno(), -1)
 
 
 class ServerTestCase(unittest.TestCase):

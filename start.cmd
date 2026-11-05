@@ -3,8 +3,8 @@ rem ============================================================
 rem  onepage-resume -- Windows double-click entry
 rem
 rem  What it does: enter WSL, cd to this repo, run "make boot" (system deps
-rem  + venv + example smoke test), start the web UI, wait for the port,
-rem  then open the browser on the Windows side.
+rem  + venv + example smoke test), supervise the web UI in the foreground,
+rem  verify this launcher's readiness, then open the Windows-side browser.
 rem
 rem  It works from both places the repo can live:
 rem   - Inside WSL (\\wsl.localhost\<distro>\home\...): the UNC path is
@@ -15,7 +15,7 @@ rem   - On a Windows drive (C:\...): works, but I/O is slow and live
 rem     preview lags, because WSL reaches it through /mnt/c.
 rem
 rem  Relies on WSL2 forwarding 127.0.0.1 into the distro, which is on by
-rem  default. If it is off, the wait loop below times out and says so.
+rem  default. If it is off, the controller times out and says so.
 rem
 rem  THIS FILE IS ASCII-ONLY WITH CRLF LINE ENDINGS, ON PURPOSE.
 rem  cmd.exe parses a .cmd under the console's OEM codepage, so UTF-8 bytes
@@ -25,6 +25,10 @@ rem  Both are enforced by .gitattributes and by tests/test_start_cmd.py.
 rem  Chinese documentation lives in README.md.
 rem ============================================================
 setlocal EnableExtensions
+rem Early setup failures must not look like a successful launch.
+set "LAUNCHER_RC=1"
+set "NO_PAUSE="
+if /i "%~1"=="/nopause" set "NO_PAUSE=1"
 set "BASE=%~dp0"
 rem
 rem  The web port. Must match webui.py DEFAULT_PORT.
@@ -99,37 +103,11 @@ call :runwsl "make boot"
 if not "%errorlevel%"=="0" goto boot_failed
 echo [onepage-resume] Environment ready.
 
-rem ---- 4. Start the service, wait for the port, then open the browser ----
-rem --no-open turns off the WSL-side auto-open so we do not get two tabs.
-if defined WSLDISTRO goto start_unc
-start "onepage-resume web service" /min wsl.exe --cd "%BASE%" -e bash -lc ".venv/bin/python webui.py --no-open"
-goto wait_for_port
-
-:start_unc
-start "onepage-resume web service" /min wsl.exe -d %WSLDISTRO% --cd "%LINUXDIR%" -e bash -lc ".venv/bin/python webui.py --no-open"
-
-:wait_for_port
-echo [onepage-resume] Waiting for the web service (up to 30 seconds)...
-rem Inside this paren block it has to stay "if not errorlevel 1": %errorlevel%
-rem would be expanded once when the block is parsed, not on each pass. Fine
-rem here, because powershell exits exactly 0 or 1.
-for /l %%i in (1,1,30) do (
-    powershell -NoProfile -Command "try{if((Invoke-WebRequest 'http://127.0.0.1:%WEBUI_PORT%' -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200){exit 0}}catch{exit 1}" >nul 2>nul
-    if not errorlevel 1 goto up
-    timeout /t 1 /nobreak >nul
-)
-echo [onepage-resume] Gave up after 30 seconds: cannot reach http://127.0.0.1:%WEBUI_PORT%
-echo Two possible causes:
-echo   - The service never started. Check the make boot output above, or the
-echo     errors in that minimized window.
-echo   - The service is up but Windows cannot reach it: WSL2
-echo     localhostForwarding is off. See the troubleshooting table in README.md.
-goto end
-
-:up
-start "" http://127.0.0.1:%WEBUI_PORT%
-echo [onepage-resume] Browser should be open now: http://127.0.0.1:%WEBUI_PORT%
-echo The web service runs in that minimized window. Close it to stop.
+rem ---- 4. Supervise our service and verify readiness before opening ----
+rem BASE, WSLDISTRO, LINUXDIR and WEBUI_PORT are inherited, not shell-escaped.
+rem Bypass applies to this PowerShell process only, not the machine policy.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BASE%\scripts\start-webui.ps1"
+set "LAUNCHER_RC=%errorlevel%"
 goto end
 
 :no_wsl
@@ -217,5 +195,5 @@ wsl.exe -d %WSLDISTRO% --cd "%LINUXDIR%" -e bash -lc "%~1"
 goto :eof
 
 :end
-endlocal
-pause
+if not defined NO_PAUSE pause
+endlocal & exit /b %LAUNCHER_RC%
