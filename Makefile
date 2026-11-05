@@ -9,6 +9,10 @@ NODE ?= node
 # README 里那张预览图的四份输入。任何一份变了，图就过期了。
 PREVIEW_SRC := content.example.toml theme.toml resume.css render.py
 
+# venv 装好依赖后留的标记。make boot 只在它不在、venv 不可用、
+# 或 requirements.txt 比它新时才重装——不再每次启动都联网升级 pip。
+SETUP_STAMP := $(VENV)/.requirements-installed
+
 # 可分发包的版本号：优先 git tag，没有 tag 就用提交短哈希。
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
 
@@ -16,7 +20,7 @@ help:
 	@echo "make boot       开箱即用：一条命令装齐系统库 + 字体 + venv + 依赖并渲染示例冒烟"
 	@echo "make bootstrap  只装系统库（已经建好 venv 时用）"
 	@echo "make dist       打一个可分发的 tar.gz（内容取自 git HEAD；真实内容与 build/ 永不进）"
-	@echo "make setup      建 venv 并装 Python 依赖（系统库交给 make boot 那一步）"
+	@echo "make setup      建 venv 并重装 Python 依赖（强制；make boot 只在需要时装）"
 	@echo "make ui         浏览器里填：左边填字，右边实时看 A4（只听本机）"
 	@echo "make fill       填空：一题一题地填出 content.toml"
 	@echo "make blank      生成一份空白表单，自己在编辑器里填（加 SAMPLE=1 填示例内容先看版面）"
@@ -27,10 +31,15 @@ help:
 	@echo "make test       跑 Python + Node.js 标准库回归测试（需要 Node.js 22+）"
 	@echo "make clean      删掉 build/"
 
+# 显式 make setup 总是重装；装完才写标记，中途失败下次 make boot 会重试。
 setup:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r requirements.txt
+	@touch $(SETUP_STAMP)
+
+$(SETUP_STAMP): requirements.txt
+	$(MAKE) setup
 
 fill:
 	$(PY) fill.py
@@ -63,11 +72,18 @@ test:
 	$(PY) -m unittest discover -s tests -v
 	PYTHON=$(PY) $(NODE) --test tests/test_app.cjs
 
-# 开箱即用：系统库（bootstrap）→ venv + Python 依赖（setup）→ 渲染示例冒烟。
-# 在全新机器上，只跑这一条就能确认环境通了。
+# 开箱即用：系统库（bootstrap）→ venv + Python 依赖（只在需要时 setup）→ 渲染示例冒烟。
+# 在全新机器上，只跑这一条就能确认环境通了。venv 里的解释器坏了（比如系统
+# Python 升级）或 weasyprint 不见了，就先作废标记再重装。
 boot:
 	./scripts/bootstrap.sh
-	$(MAKE) setup
+	@$(PY) -c "import importlib.metadata as m; m.version('weasyprint')" >/dev/null 2>&1 \
+		|| rm -f $(SETUP_STAMP)
+	@if $(MAKE) -q $(SETUP_STAMP) 2>/dev/null; then \
+		echo "Python 依赖已是最新，跳过 make setup（要强制重装就跑 make setup）。"; \
+	else \
+		$(MAKE) setup; \
+	fi
 	$(MAKE) example
 	@echo "✔ 环境就绪。接下去：make ui（浏览器里填）或 make fill（命令行填）。"
 

@@ -107,7 +107,10 @@ make boot
 
 1. `scripts/bootstrap.sh` —— 自动探测包管理器，把 WeasyPrint 要的系统库和 CJK 字体
    装齐（**缺才装**，不会反复跳出来要 sudo）；非交互、没有 sudo 时会打印手动命令而不是卡死。
-2. `make setup` —— 建 `.venv` 并装 Python 依赖。
+2. `make setup` —— 建 `.venv` 并装 Python 依赖。**只在需要时才跑**：`.venv` 还没装好、
+   里面的 Python 或 WeasyPrint 不可用，或 `requirements.txt` 比上次安装新。否则跳过，
+   不联网、不升级 pip——所以双击 `start.cmd` 的第二次起就快了。想强制重装就直接
+   跑 `make setup`。
 3. `make example` —— 渲染虚构示例冒烟。`build/example/resume.pdf` 出来就说明环境通了。
 
 然后挑一种填法开始（见下），最后 `make render` 出你自己的 PDF。
