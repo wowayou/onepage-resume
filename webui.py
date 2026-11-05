@@ -984,7 +984,7 @@ def serve(host: str, port: int, studio: Studio, open_browser: bool = True, *,
         shown = f"[{host}]" if ":" in host else host
         url = f"http://{shown}:{server.server_port}"
 
-        # flush：make ui 之类的场景 stdout 不是终端，缓冲会让这几行迟迟不出来，
+        # flush：经启动控制器等管道重定向时 stdout 不是终端，缓冲会让这几行迟迟不出来，
         # 而用户正等着这个网址。
         print(f"填空表单：  {url}", flush=True)
         print(f"内容目录：  {studio.content_dir}")

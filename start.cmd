@@ -98,7 +98,8 @@ if not "%errorlevel%"=="0" goto not_reachable
 
 rem ---- 3. One command to set the environment up (idempotent) ----
 echo [onepage-resume] Running make boot: system deps + venv + example render.
-echo [onepage-resume] The first run takes a few minutes.
+echo [onepage-resume] The first run installs dependencies and takes a few minutes;
+echo [onepage-resume] later runs skip what is already installed.
 call :runwsl "make boot"
 if not "%errorlevel%"=="0" goto boot_failed
 echo [onepage-resume] Environment ready.

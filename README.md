@@ -103,14 +103,20 @@ cd onepage-resume
 make boot
 ```
 
+还没有 `make` 命令时，先直接跑 `scripts/bootstrap.sh`（它会把 `make` 一起装上），再
+`make boot`。macOS 上这个脚本需要 Bash 4 以上（系统自带的是 3.2）：先
+`brew install bash`，并确认 `bash --version` 显示的是新版。
+
 `make boot` 依次做三件事，**幂等**（重复跑不会坏事）：
 
 1. `scripts/bootstrap.sh` —— 自动探测包管理器，把 WeasyPrint 要的系统库和 CJK 字体
    装齐（**缺才装**，不会反复跳出来要 sudo）；非交互、没有 sudo 时会打印手动命令而不是卡死。
-2. `make setup` —— 建 `.venv` 并装 Python 依赖。**只在需要时才跑**：`.venv` 还没装好、
-   里面的 Python 或 WeasyPrint 不可用，或 `requirements.txt` 比上次安装新。否则跳过，
-   不联网、不升级 pip——所以双击 `start.cmd` 的第二次起就快了。想强制重装就直接
-   跑 `make setup`。
+2. `make setup` —— 建 `.venv` 并装 Python 依赖。**只在需要时才跑**：还没装过、
+   `.venv` 里的 Python 跑不起来或查不到 WeasyPrint 的安装记录，或 `requirements.txt` 比
+   上次安装新。否则跳过，不联网、不升级 pip——所以双击 `start.cmd` 的第二次起就快了。
+   模块或系统库加载失败不在这一步判断，由下一步的示例渲染报出来。想重新执行安装
+   就直接跑 `make setup`（它不会强制重装已满足要求的包）；环境彻底坏了就删掉
+   `.venv` 再 `make boot`。
 3. `make example` —— 渲染虚构示例冒烟。`build/example/resume.pdf` 出来就说明环境通了。
 
 然后挑一种填法开始（见下），最后 `make render` 出你自己的 PDF。
@@ -357,6 +363,8 @@ sudo apt install -y python3-venv python3-pip \
 程序会打印一行"跳过"。
 
 ### macOS
+
+自动安装脚本 `scripts/bootstrap.sh` 需要 Bash 4 以上（`brew install bash`）。手动装就是：
 
 ```bash
 brew install pango cairo harfbuzz poppler

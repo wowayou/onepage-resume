@@ -125,7 +125,7 @@ class BootSetupStampTest(unittest.TestCase):
         self.assertIn("pip install -r requirements.txt", self.installs())
         self.assertTrue(self.stamp.exists())
 
-    def test_explicit_setup_always_reinstalls(self):
+    def test_explicit_setup_always_reruns_install_steps(self):
         self.make("boot")
         self.make("setup")
         self.assertIn("pip install --upgrade pip", self.installs())

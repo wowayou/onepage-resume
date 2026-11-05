@@ -2,9 +2,10 @@
 # 开箱即用的前半：把 WeasyPrint 需要的系统库和 CJK 字体装齐。
 #
 # 幂等：已经装好的包不会再碰（避免每次都跳出来要 sudo）；只有确实缺东西
-# 才去动包管理器。跑完 `make boot` 的另一半（venv + 依赖 + 渲染示例）自然跟上。
+# 才去动包管理器。`make boot` 接着做另一半：venv + Python 依赖（只在需要时装）
+# 与渲染示例冒烟。
 #
-# 支持：Debian / Ubuntu / WSL2（apt-get）和 macOS（Homebrew）。
+# 支持：Debian / Ubuntu / WSL2（apt-get）和 macOS（Homebrew，另需 Bash 4+：mapfile）。
 # 原生 Windows 不在这份脚本里——见仓库根目录的 start.cmd（走 WSL2）。
 
 set -euo pipefail
@@ -81,9 +82,10 @@ else
         elif have sudo && sudo -n true 2>/dev/null; then
             SUDO=(sudo)               # 非交互但已配好免密 sudo
         else
-            # 没有交互终端、sudo 又要密码：不硬失败，把命令打印出来让用户自己跑。
-            # 若缺的正是 pango/cairo，随后的 make example 会以缺库报错点出来。
-            say "没有交互终端，跳过自动安装。请手动执行下面这行再重跑 make boot："
+            # 拿不到安装权限（没有 sudo，或无交互终端且 sudo 要密码）：不硬失败，
+            # 把命令打印出来让用户自己跑。若缺的正是 pango/cairo，随后的 make example
+            # 会以缺库报错点出来。
+            say "拿不到安装权限，跳过自动安装。请以 root 或在能用 sudo 的终端里执行下面这行，再重跑 make boot："
             printf '    sudo apt-get update && sudo apt-get install -y --no-install-recommends %s\n' "${SYS[*]}"
         fi
         if [ "$(id -u)" -eq 0 ] || [ "${#SUDO[@]}" -gt 0 ]; then
@@ -103,4 +105,5 @@ else
     say "到这一步渲染仍会回落其它字体——先用 make example 看看再决定要不要补。"
 fi
 
-say "系统依赖就绪。下一步：make setup && make example"
+# 由 make boot 调用时，下一步它自己会做；单独跑这个脚本时才需要手动接上。
+say "系统依赖就绪。（单独运行本脚本时，下一步：make boot）"
